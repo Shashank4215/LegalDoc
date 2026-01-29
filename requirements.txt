@@ -3,6 +3,9 @@
 # Database (PostgreSQL)
 psycopg2-binary>=2.9.9
 
+# Database (MongoDB)
+pymongo>=4.6.0
+
 # AI/ML
 anthropic>=0.34.0
 
