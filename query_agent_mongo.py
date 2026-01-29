@@ -475,6 +475,76 @@ def query_accused(case_id: str) -> str:
         return f"Error querying accused: {str(e)}"
 
 
+def _detect_query_intent(query: str) -> dict:
+    """
+    Analyze user query to detect intent and suggest which tools might be needed.
+    Returns a dict with detected intents and suggested tools.
+    """
+    query_lower = query.lower()
+    intent = {
+        'needs_case_id': False,
+        'suggested_tools': [],
+        'keywords_found': []
+    }
+    
+    # Check for case-related keywords
+    case_keywords = {
+        'accused': ['accused', 'defendant', 'perpetrator', 'متهم', 'الجاني'],
+        'victim': ['victim', 'complainant', 'مشتكي', 'المجني عليه'],
+        'judge': ['judge', 'قاضي'],
+        'incident': ['incident', 'حادثة', 'what happened'],
+        'location': ['location', 'place', 'where', 'مكان'],
+        'date': ['date', 'time', 'when', 'تاريخ', 'وقت'],
+        'medical': ['medical', 'hospital', 'injury', 'injuries', 'طبي', 'مستشفى', 'إصابة'],
+        'lab': ['lab', 'test', 'laboratory', 'مختبر', 'فحص'],
+        'weapon': ['weapon', 'tool', 'سلاح', 'أداة'],
+        'charge': ['charge', 'crime', 'جريمة', 'اتهام'],
+        'verdict': ['verdict', 'judgment', 'حكم'],
+        'sentence': ['sentence', 'punishment', 'penalty', 'عقوبة'],
+        'police': ['police', 'station', 'شرطة', 'مركز'],
+        'confession': ['confess', 'confession', 'اعتراف'],
+        'denial': ['deny', 'denial', 'أنكر', 'نفى'],
+        'waiver': ['waiver', 'تنازل'],
+        'parties': ['parties', 'party', 'طرف'],
+        'status': ['status', 'stage', 'مرحلة', 'حالة']
+    }
+    
+    for intent_type, keywords in case_keywords.items():
+        if any(kw in query_lower for kw in keywords):
+            intent['keywords_found'].append(intent_type)
+            intent['needs_case_id'] = True
+    
+    # Map intents to tools
+    tool_mapping = {
+        'accused': 'query_accused',
+        'victim': 'query_victims',
+        'judge': 'get_judge_name',
+        'incident': 'get_case_incident_details',
+        'location': 'get_case_location_info',
+        'date': 'get_case_dates_times',
+        'medical': 'get_case_medical_info',
+        'lab': 'get_lab_records',
+        'weapon': 'get_case_weapons_tools',
+        'charge': 'query_charges',
+        'verdict': 'get_verdict',
+        'sentence': 'get_sentences',
+        'police': 'get_case_police_station',
+        'confession': 'get_case_confession_denial',
+        'denial': 'get_case_confession_denial',
+        'waiver': 'get_case_waiver_info',
+        'parties': 'query_parties',
+        'status': 'get_case_current_status'
+    }
+    
+    for keyword in intent['keywords_found']:
+        if keyword in tool_mapping:
+            tool = tool_mapping[keyword]
+            if tool not in intent['suggested_tools']:
+                intent['suggested_tools'].append(tool)
+    
+    return intent
+
+
 def _extract_case_id_from_messages(messages: List) -> Optional[str]:
     """
     Extract case ID from a list of LangChain messages.
@@ -1027,6 +1097,82 @@ def get_case_medical_info(case_id: str) -> str:
     
     except Exception as e:
         logger.error(f"Error getting medical info: {e}", exc_info=True)
+        return f"Error: {str(e)}"
+
+
+@tool
+def get_lab_records(case_id: str) -> str:
+    """Get lab test records and results for a case. Use this tool when asked about lab tests, lab results, laboratory tests, or test results (نتائج المختبر, الفحوصات المخبرية)."""
+    try:
+        with MongoManager(**CONFIG['mongodb']) as mongo:
+            documents_collection = mongo.db['documents']
+            
+            # Get lab test documents
+            docs = list(documents_collection.find({
+                'case_id': ObjectId(case_id),
+                'document_type': 'lab_test_results'
+            }).sort('created_at', 1))
+            
+            if not docs:
+                return json.dumps({'message': 'No lab test records found for this case.'}, ensure_ascii=False)
+            
+            lab_records = []
+            for doc in docs:
+                entities = doc.get('extracted_entities', {}) or {}
+                record = {
+                    'test_date': entities.get('test_date'),
+                    'test_type': entities.get('test_type'),
+                    'result': entities.get('result'),
+                    'subject': entities.get('subject_party', {}).get('name_ar') if isinstance(entities.get('subject_party'), dict) else None,
+                    'lab_name': entities.get('lab_name'),
+                    'test_method': entities.get('test_method'),
+                    'document': doc.get('file_name')
+                }
+                lab_records.append(record)
+            
+            return json.dumps({'lab_records': lab_records}, indent=2, ensure_ascii=False)
+    
+    except Exception as e:
+        logger.error(f"Error getting lab records: {e}", exc_info=True)
+        return f"Error: {str(e)}"
+
+
+@tool
+def get_medical_records(case_id: str) -> str:
+    """Get medical records and reports for a case. Use this tool when asked about medical records, medical reports, forensic medical reports, or medical examinations (السجلات الطبية, التقارير الطبية, الفحوصات الطبية)."""
+    try:
+        with MongoManager(**CONFIG['mongodb']) as mongo:
+            documents_collection = mongo.db['documents']
+            
+            # Get medical report documents
+            docs = list(documents_collection.find({
+                'case_id': ObjectId(case_id),
+                'document_type': {'$in': ['forensic_medical_report', 'medical_report']}
+            }).sort('created_at', 1))
+            
+            if not docs:
+                return json.dumps({'message': 'No medical records found for this case.'}, ensure_ascii=False)
+            
+            medical_records = []
+            for doc in docs:
+                entities = doc.get('extracted_entities', {}) or {}
+                record = {
+                    'report_date': entities.get('report_date'),
+                    'examination_date': entities.get('examination_date'),
+                    'examination_type': entities.get('examination_type'),
+                    'findings': entities.get('medical_findings_ar'),
+                    'conclusions': entities.get('conclusions_ar'),
+                    'injuries': entities.get('injuries'),
+                    'examiner': entities.get('examiner_name'),
+                    'subject': entities.get('subject_party', {}).get('name_ar') if isinstance(entities.get('subject_party'), dict) else None,
+                    'document': doc.get('file_name')
+                }
+                medical_records.append(record)
+            
+            return json.dumps({'medical_records': medical_records}, indent=2, ensure_ascii=False)
+    
+    except Exception as e:
+        logger.error(f"Error getting medical records: {e}", exc_info=True)
         return f"Error: {str(e)}"
 
 
@@ -1609,7 +1755,9 @@ tools = [
     get_judgment_reasoning,  # Get judgment reasoning
     get_incident_cause,  # Get incident cause
     get_police_actions,  # Get police actions
-    get_consequences  # Get consequences/damages
+    get_consequences,  # Get consequences/damages
+    get_lab_records,  # Get lab test records
+    get_medical_records  # Get medical records/reports
 ]
 
 # Bind tools to LLM
@@ -1633,6 +1781,8 @@ AVAILABLE TOOLS (read tool descriptions to understand what each does):
 8. **get_case_location_info**: Get location information (incident location, police station, court, hospital)
 9. **get_case_dates_times**: Get all dates and times (incident, report, court sessions, judgment)
 10. **get_case_medical_info**: Get medical information (injuries, hospital transfers, lab tests, alcohol tests)
+10a. **get_lab_records**: Get lab test records and results specifically (نتائج المختبر, الفحوصات المخبرية)
+10b. **get_medical_records**: Get medical records and forensic medical reports specifically (السجلات الطبية, التقارير الطبية)
 11. **get_case_weapons_tools**: Get information about weapons or tools used in the incident
 12. **get_case_confession_denial**: Get information about confessions or denials by the accused
 13. **get_case_waiver_info**: Get information about waivers (تنازل) filed by victims
@@ -1652,7 +1802,9 @@ AVAILABLE TOOLS (read tool descriptions to understand what each does):
 27. **check_case_id_needed**: Check if a case ID is needed (use when query is vague and no case ID provided)
 
 IMPORTANT NOTES:
+- **MULTIPLE TOOLS**: When multiple tools are suggested in a system message (e.g., "SUGGESTED TOOLS: query_accused, query_victims"), you MUST call ALL of them in a single turn to provide a complete answer
 - You can call MULTIPLE tools in a single turn if the question requires it (e.g., if asked about both victim AND accused, call both query_victims AND query_accused)
+- If a system message shows multiple suggested tools, it means the query needs information from all of them - call them all in parallel
 - Judge (القاضي) is NOT the same as accused (متهم) or victim (مشتكي) - use get_judge_name ONLY for judge queries
 - Read each tool's description carefully to select the most appropriate tool(s)
 - All tools require a case_id parameter (24-character hex string)
@@ -1666,14 +1818,11 @@ CRITICAL: ALWAYS USE TOOLS - NO HALLUCINATION. For ANY question about cases, par
 
 {TOOL_DESCRIPTIONS}
 
-CRITICAL RULE #0 - JUDGE QUERIES (READ THIS FIRST):
-**If the user asks "who was the judge?", "من هو القاضي?", "judge name", or ANY question about the JUDGE:**
-- You MUST use `get_judge_name(case_id='...')` tool
-- NEVER use `query_accused` - the judge is NOT an accused person
-- NEVER use `query_parties` - the judge is NOT a party to the case
-- NEVER use `query_victims` - the judge is NOT a victim
-- The judge presides over the case and makes legal decisions
-- Judge ≠ Accused/Defendant (متهم) - completely different roles!
+IMPORTANT - JUDGE QUERIES:
+- ONLY use `get_judge_name` when the question is SPECIFICALLY about the judge (e.g., "who was the judge?", "من هو القاضي?")
+- Judge (القاضي) is different from accused (متهم) and victim (مشتكي)
+- If asked about "who was the accused" or "who was the victim", use `query_accused` or `query_victims` respectively
+- Do NOT confuse judge with accused/defendant - they are completely different roles
 
 IMPORTANT RULES:
 1. **CHECK FOR CASE ID FIRST**: If the user asks a vague question about a SPECIFIC CASE (e.g., "who was the accused?", "what happened in the case?", "what is the verdict?", "who was the judge?") without specifying a case ID, the system will automatically check the conversation history for a previously mentioned case ID. 
@@ -1884,12 +2033,14 @@ def create_agent():
                     suggested_tools = []
                     
                     # Check for multiple tool needs (not elif - can have multiple)
-                    if any(kw in question_lower for kw in ["judge", "قاضي", "who was the judge"]):
-                        suggested_tools.append("get_judge_name")
+                    # IMPORTANT: Check accused/victim FIRST, then judge (judge check must be VERY specific)
                     if any(kw in question_lower for kw in ["accused", "defendant", "perpetrator", "متهم", "الجاني"]):
                         suggested_tools.append("query_accused")
                     if any(kw in question_lower for kw in ["victim", "complainant", "مشتكي", "المجني عليه"]):
                         suggested_tools.append("query_victims")
+                    # Judge check must be VERY specific - only if judge is explicitly mentioned in the question
+                    if ("judge" in question_lower or "قاضي" in question_lower) and ("who was the judge" in question_lower or "من هو القاضي" in question_lower or "judge name" in question_lower):
+                        suggested_tools.append("get_judge_name")
                     if any(kw in question_lower for kw in ["verdict", "حكم"]):
                         suggested_tools.append("get_case_verdict_punishment")
                     if any(kw in question_lower for kw in ["incident", "حادثة"]):
@@ -1903,20 +2054,27 @@ def create_agent():
                     if suggested_tools:
                         if len(suggested_tools) == 1:
                             tool_suggestion = f"{suggested_tools[0]}(case_id='{case_id}')"
+                            action_instruction = f"Call {tool_suggestion} to answer the original question."
                         else:
                             tool_suggestion = " and ".join([f"{tool}(case_id='{case_id}')" for tool in suggested_tools])
-                        tool_suggestion += " (you can call multiple tools if needed)"
+                            action_instruction = f"CALL ALL OF THESE TOOLS in a single turn: {tool_suggestion}. The question requires information from all of them."
                     else:
                         tool_suggestion = f"the appropriate tool(s) with case_id='{case_id}'"
+                        action_instruction = f"Call {tool_suggestion} to answer the original question."
                     
-                    hint_msg = SystemMessage(content=f"CONTEXT: The user confirmed to use a case ID from earlier conversation.\n\nCASE ID: {case_id}\n\nORIGINAL QUESTION: '{original_question}'\n\nACTION REQUIRED: Call {tool_suggestion} to answer the original question. The case ID is already provided - do NOT call check_case_id_needed.")
+                    # Add intent info if multiple tools
+                    intent_info = ""
+                    if len(suggested_tools) > 1:
+                        intent_info = f"\n\n⚠️ IMPORTANT: Multiple tools detected - you MUST call ALL {len(suggested_tools)} tools ({', '.join(suggested_tools)}) to answer completely."
+                    
+                    hint_msg = SystemMessage(content=f"CONTEXT: The user confirmed to use a case ID from earlier conversation.\n\nCASE ID: {case_id}\n\nORIGINAL QUESTION: '{original_question}'{intent_info}\n\nACTION REQUIRED: {action_instruction} The case ID is already provided - do NOT call check_case_id_needed.")
                 else:
                     hint_msg = SystemMessage(content=f"CONTEXT: The user confirmed to use a case ID from earlier conversation.\n\nCASE ID: {case_id}\n\nACTION REQUIRED: Look at the conversation history to find the original question, then call the appropriate tool(s) with case_id='{case_id}'. You can call multiple tools if needed. The case ID is already provided - do NOT call check_case_id_needed.")
                 messages = [SystemMessage(content=SYSTEM_PROMPT), hint_msg] + [m for m in state["messages"] if not isinstance(m, SystemMessage)]
         
-        # PROACTIVE CASE ID EXTRACTION: If user asks a case-related question without a case ID,
-        # check if there's a case ID in the conversation history BEFORE calling the LLM
-        elif not case_id_already_extracted and last_user_msg_content:
+        # ALWAYS CHECK FOR CASE ID IN HISTORY: For every case-related query, check if there's a case ID in conversation history
+        # This ensures context is maintained across multiple messages
+        if not case_id_already_extracted and last_user_msg_content:
             # Check if the query is case-related (similar logic to check_case_id_needed)
             case_keywords = [
                 "case", "قضية", "دعوى", "ملف", "verdict", "حكم", "judgment",
@@ -1945,46 +2103,78 @@ def create_agent():
             if (has_case_keyword or has_case_phrase) and not case_ids_in_query:
                 case_id = _extract_case_id_from_messages(state["messages"])
                 if case_id:
-                    logger.info(f"✅ Proactively extracted case ID from conversation history for query: {last_user_msg_content[:50]}...")
-                    # Determine which tool(s) to use based on the question - support multiple tools
-                    question_lower = last_user_msg_content.lower()
-                    suggested_tools = []
+                    logger.info(f"✅ Extracted case ID from conversation history for query: {last_user_msg_content[:50]}...")
+                    # Use query intent detection to suggest tools
+                    intent = _detect_query_intent(last_user_msg_content)
+                    suggested_tools = intent.get('suggested_tools', [])
                     
-                    # Check for multiple tool needs (not elif - can have multiple)
-                    if any(keyword in question_lower for keyword in ["judge", "قاضي", "who was the judge"]):
-                        suggested_tools.append("get_judge_name")
-                    if any(keyword in question_lower for keyword in ["accused", "defendant", "perpetrator", "متهم", "الجاني"]):
-                        suggested_tools.append("query_accused")
-                    if any(keyword in question_lower for keyword in ["victim", "complainant", "مشتكي", "المجني عليه"]):
-                        suggested_tools.append("query_victims")
-                    if any(keyword in question_lower for keyword in ["verdict level", "court level", "مستوى الحكم"]):
-                        suggested_tools.append("get_verdict_level")
-                    if any(keyword in question_lower for keyword in ["police station", "المركز الأمني"]):
-                        suggested_tools.append("get_case_police_station")
-                    if any(keyword in question_lower for keyword in ["incident", "حادثة", "details"]):
-                        suggested_tools.append("get_case_incident_details")
-                    if any(keyword in question_lower for keyword in ["charge", "crime", "جريمة", "اتهام"]):
-                        suggested_tools.append("query_charges")
-                    if any(keyword in question_lower for keyword in ["parties", "طرف"]):
-                        suggested_tools.append("query_parties")
+                    # Fallback to keyword-based detection if intent detection didn't find tools
+                    if not suggested_tools:
+                        question_lower = last_user_msg_content.lower()
+                        # Check for multiple tool needs (not elif - can have multiple)
+                        # IMPORTANT: Check accused/victim FIRST, then judge (judge check must be VERY specific)
+                        if any(keyword in question_lower for keyword in ["accused", "defendant", "perpetrator", "متهم", "الجاني"]):
+                            suggested_tools.append("query_accused")
+                        if any(keyword in question_lower for keyword in ["victim", "complainant", "مشتكي", "المجني عليه"]):
+                            suggested_tools.append("query_victims")
+                        # Judge check must be VERY specific - only if judge is explicitly mentioned in the question
+                        if ("judge" in question_lower or "قاضي" in question_lower) and ("who was the judge" in question_lower or "من هو القاضي" in question_lower or "judge name" in question_lower):
+                            suggested_tools.append("get_judge_name")
+                        if any(keyword in question_lower for keyword in ["verdict level", "court level", "مستوى الحكم"]):
+                            suggested_tools.append("get_verdict_level")
+                        if any(keyword in question_lower for keyword in ["police station", "المركز الأمني"]):
+                            suggested_tools.append("get_case_police_station")
+                        if any(keyword in question_lower for keyword in ["incident", "حادثة", "details"]):
+                            suggested_tools.append("get_case_incident_details")
+                        if any(keyword in question_lower for keyword in ["charge", "crime", "جريمة", "اتهام"]):
+                            suggested_tools.append("query_charges")
+                        if any(keyword in question_lower for keyword in ["parties", "طرف"]):
+                            suggested_tools.append("query_parties")
                     
                     # Build tool hint message
                     if suggested_tools:
                         if len(suggested_tools) == 1:
                             tool_hint = f"{suggested_tools[0]}(case_id='{case_id}')"
+                            action_instruction = f"Call {tool_hint} to answer the question."
                         else:
                             tool_hint = " and ".join([f"{tool}(case_id='{case_id}')" for tool in suggested_tools])
-                        tool_hint += f" (you can call multiple tools if needed)"
+                            action_instruction = f"CALL ALL OF THESE TOOLS in a single turn: {tool_hint}. The question requires information from all of them."
                     else:
                         tool_hint = f"the appropriate tool(s) with case_id='{case_id}'"
+                        action_instruction = f"Call {tool_hint} to answer the question."
                     
-                    hint_msg = SystemMessage(content=f"CONTEXT: A case ID was found in the conversation history.\n\nCASE ID: {case_id}\n\nCURRENT QUESTION: '{last_user_msg_content}'\n\nACTION REQUIRED: Call {tool_hint} to answer the question. The case ID is already provided - do NOT call check_case_id_needed.")
+                    # Add query intent information to help LLM
+                    intent_info = ""
+                    if intent.get('keywords_found'):
+                        intent_info = f"\n\nQUERY INTENT DETECTED: {', '.join(intent['keywords_found'])}\nSUGGESTED TOOLS: {', '.join(suggested_tools) if suggested_tools else 'Use tool descriptions to select'}"
+                        if len(suggested_tools) > 1:
+                            intent_info += f"\n⚠️ IMPORTANT: Multiple tools detected - you MUST call ALL {len(suggested_tools)} tools ({', '.join(suggested_tools)}) to answer completely."
+                    
+                    hint_msg = SystemMessage(content=f"CONTEXT: A case ID was found in the conversation history.\n\nCASE ID: {case_id}\n\nCURRENT QUESTION: '{last_user_msg_content}'{intent_info}\n\nACTION REQUIRED: {action_instruction} The case ID is already provided - do NOT call check_case_id_needed.")
                     messages = [SystemMessage(content=SYSTEM_PROMPT), hint_msg] + [m for m in state["messages"] if not isinstance(m, SystemMessage)]
         
-        # If case ID was already extracted, make sure it's in the messages
-        elif case_id_already_extracted and extracted_case_id:
-            # Re-inject the case ID instruction to ensure it's used
-            hint_msg = SystemMessage(content=f"CRITICAL INSTRUCTION: A case ID has been extracted from conversation history.\n\nCASE ID: {extracted_case_id}\n\nYOU MUST use this case ID to answer the user's question. Call the appropriate tool with case_id='{extracted_case_id}'. DO NOT call check_case_id_needed.")
+        # If case ID was already extracted, enhance with query intent and re-inject
+        elif case_id_already_extracted and extracted_case_id and last_user_msg_content:
+            # Use query intent detection to suggest tools
+            intent = _detect_query_intent(last_user_msg_content)
+            suggested_tools = intent.get('suggested_tools', [])
+            
+            intent_info = ""
+            action_instruction = ""
+            if intent.get('keywords_found'):
+                intent_info = f"\n\nQUERY INTENT DETECTED: {', '.join(intent['keywords_found'])}\nSUGGESTED TOOLS: {', '.join(suggested_tools) if suggested_tools else 'Use tool descriptions to select'}"
+                if len(suggested_tools) > 1:
+                    intent_info += f"\n⚠️ IMPORTANT: Multiple tools detected - you MUST call ALL {len(suggested_tools)} tools ({', '.join(suggested_tools)}) to answer completely."
+                    action_instruction = f"Call ALL suggested tools with case_id='{extracted_case_id}' in a single turn."
+                elif len(suggested_tools) == 1:
+                    action_instruction = f"Call {suggested_tools[0]}(case_id='{extracted_case_id}') to answer the question."
+                else:
+                    action_instruction = f"Call the appropriate tool(s) with case_id='{extracted_case_id}'."
+            else:
+                action_instruction = f"Call the appropriate tool(s) with case_id='{extracted_case_id}'."
+            
+            # Re-inject the case ID instruction with intent information
+            hint_msg = SystemMessage(content=f"CONTEXT: A case ID has been extracted from conversation history.\n\nCASE ID: {extracted_case_id}\n\nCURRENT QUESTION: '{last_user_msg_content}'{intent_info}\n\nACTION REQUIRED: {action_instruction} The case ID is already provided - do NOT call check_case_id_needed.")
             messages = [SystemMessage(content=SYSTEM_PROMPT), hint_msg] + [m for m in state["messages"] if not isinstance(m, SystemMessage) or "CASE ID:" not in str(m.content)]
         
         response = llm_with_tools.invoke(messages)
