@@ -1395,6 +1395,192 @@ def get_appeal_deadline(case_id: str) -> str:
         return f"Error: {str(e)}"
 
 
+@tool
+def get_verdict(case_id: str) -> str:
+    """Get the verdict/decision for the case. Use this tool when asked about verdict (الحكم, "verdict", "decision", "ruling")."""
+    try:
+        with MongoManager(**CONFIG['mongodb']) as mongo:
+            documents_collection = mongo.db['documents']
+            
+            judgment_docs = list(documents_collection.find({
+                'case_id': ObjectId(case_id),
+                'document_type': 'court_judgment'
+            }).sort('created_at', -1))
+            
+            if not judgment_docs:
+                return json.dumps({'message': 'No judgment found for this case yet.'}, ensure_ascii=False)
+            
+            judgment = judgment_docs[0]
+            entities = judgment.get('extracted_entities', {}) or {}
+            
+            return json.dumps({
+                'verdict': entities.get('verdict'),
+                'judgment_date': entities.get('judgment_date'),
+                'judgment_file': judgment.get('file_name')
+            }, indent=2, ensure_ascii=False)
+    
+    except Exception as e:
+        logger.error(f"Error getting verdict: {e}", exc_info=True)
+        return f"Error: {str(e)}"
+
+
+@tool
+def get_sentences(case_id: str) -> str:
+    """Get the sentences/punishments for the case. Use this tool when asked about sentences (العقوبات, "sentences", "punishments")."""
+    try:
+        with MongoManager(**CONFIG['mongodb']) as mongo:
+            documents_collection = mongo.db['documents']
+            
+            judgment_docs = list(documents_collection.find({
+                'case_id': ObjectId(case_id),
+                'document_type': 'court_judgment'
+            }).sort('created_at', -1))
+            
+            if not judgment_docs:
+                return json.dumps({'message': 'No judgment found for this case yet.'}, ensure_ascii=False)
+            
+            judgment = judgment_docs[0]
+            entities = judgment.get('extracted_entities', {}) or {}
+            
+            return json.dumps({
+                'sentences': entities.get('sentences', []),
+                'judgment_date': entities.get('judgment_date'),
+                'judgment_file': judgment.get('file_name')
+            }, indent=2, ensure_ascii=False)
+    
+    except Exception as e:
+        logger.error(f"Error getting sentences: {e}", exc_info=True)
+        return f"Error: {str(e)}"
+
+
+@tool
+def get_judgment_reasoning(case_id: str) -> str:
+    """Get the reasoning/justification for the judgment. Use this tool when asked about judgment reasoning (أسباب الحكم, "reasoning", "justification")."""
+    try:
+        with MongoManager(**CONFIG['mongodb']) as mongo:
+            documents_collection = mongo.db['documents']
+            
+            judgment_docs = list(documents_collection.find({
+                'case_id': ObjectId(case_id),
+                'document_type': 'court_judgment'
+            }).sort('created_at', -1))
+            
+            if not judgment_docs:
+                return json.dumps({'message': 'No judgment found for this case yet.'}, ensure_ascii=False)
+            
+            judgment = judgment_docs[0]
+            entities = judgment.get('extracted_entities', {}) or {}
+            
+            return json.dumps({
+                'reasoning': entities.get('reasoning_ar'),
+                'judgment_date': entities.get('judgment_date'),
+                'judgment_file': judgment.get('file_name')
+            }, indent=2, ensure_ascii=False)
+    
+    except Exception as e:
+        logger.error(f"Error getting judgment reasoning: {e}", exc_info=True)
+        return f"Error: {str(e)}"
+
+
+@tool
+def get_incident_cause(case_id: str) -> str:
+    """Get the cause/reason for the incident. Use this tool when asked about incident cause (سبب الحادثة, "cause", "reason")."""
+    try:
+        with MongoManager(**CONFIG['mongodb']) as mongo:
+            documents_collection = mongo.db['documents']
+            
+            docs = list(documents_collection.find({
+                'case_id': ObjectId(case_id),
+                'document_type': {'$in': ['police_complaint', 'police_statement', 'investigation_record']}
+            }).sort('created_at', 1))
+            
+            if not docs:
+                return json.dumps({'message': 'No incident documents found for this case.'}, ensure_ascii=False)
+            
+            causes = []
+            for doc in docs:
+                entities = doc.get('extracted_entities', {}) or {}
+                cause = entities.get('cause_ar') or entities.get('reason_ar')
+                if cause:
+                    causes.append({
+                        'cause': cause,
+                        'document': doc.get('file_name'),
+                        'document_type': doc.get('document_type')
+                    })
+            
+            return json.dumps({'causes': causes} if causes else {'message': 'No cause information found.'}, indent=2, ensure_ascii=False)
+    
+    except Exception as e:
+        logger.error(f"Error getting incident cause: {e}", exc_info=True)
+        return f"Error: {str(e)}"
+
+
+@tool
+def get_police_actions(case_id: str) -> str:
+    """Get the actions taken by police. Use this tool when asked about police actions (إجراءات الشرطة, "police actions", "actions taken")."""
+    try:
+        with MongoManager(**CONFIG['mongodb']) as mongo:
+            documents_collection = mongo.db['documents']
+            
+            docs = list(documents_collection.find({
+                'case_id': ObjectId(case_id),
+                'document_type': {'$in': ['police_complaint', 'police_statement', 'investigation_record']}
+            }).sort('created_at', 1))
+            
+            if not docs:
+                return json.dumps({'message': 'No police documents found for this case.'}, ensure_ascii=False)
+            
+            actions = []
+            for doc in docs:
+                entities = doc.get('extracted_entities', {}) or {}
+                action = entities.get('police_actions_ar') or entities.get('actions_taken_ar')
+                if action:
+                    actions.append({
+                        'actions': action,
+                        'document': doc.get('file_name'),
+                        'document_type': doc.get('document_type')
+                    })
+            
+            return json.dumps({'police_actions': actions} if actions else {'message': 'No police actions found.'}, indent=2, ensure_ascii=False)
+    
+    except Exception as e:
+        logger.error(f"Error getting police actions: {e}", exc_info=True)
+        return f"Error: {str(e)}"
+
+
+@tool
+def get_consequences(case_id: str) -> str:
+    """Get the consequences/damages from the incident. Use this tool when asked about consequences (النتائج, "consequences", "damages")."""
+    try:
+        with MongoManager(**CONFIG['mongodb']) as mongo:
+            documents_collection = mongo.db['documents']
+            
+            docs = list(documents_collection.find({
+                'case_id': ObjectId(case_id),
+                'document_type': {'$in': ['police_complaint', 'police_statement', 'investigation_record']}
+            }).sort('created_at', 1))
+            
+            if not docs:
+                return json.dumps({'message': 'No incident documents found for this case.'}, ensure_ascii=False)
+            
+            consequences = []
+            for doc in docs:
+                entities = doc.get('extracted_entities', {}) or {}
+                consequence = entities.get('consequences_ar') or entities.get('damages_ar')
+                if consequence:
+                    consequences.append({
+                        'consequences': consequence,
+                        'document': doc.get('file_name'),
+                        'document_type': doc.get('document_type')
+                    })
+            
+            return json.dumps({'consequences': consequences} if consequences else {'message': 'No consequences information found.'}, indent=2, ensure_ascii=False)
+    
+    except Exception as e:
+        logger.error(f"Error getting consequences: {e}", exc_info=True)
+        return f"Error: {str(e)}"
+
+
 # Create tools list
 tools = [
     check_case_id_needed,  # Check if case ID is needed (should be called first for vague queries)
@@ -1417,7 +1603,13 @@ tools = [
     get_judge_name,  # Dedicated tool for judge name
     get_verdict_level,  # Dedicated tool for verdict/court level
     get_judgment_date,  # Dedicated tool for judgment date
-    get_appeal_deadline  # Dedicated tool for appeal deadline
+    get_appeal_deadline,  # Dedicated tool for appeal deadline
+    get_verdict,  # Get verdict/decision
+    get_sentences,  # Get sentences/punishments
+    get_judgment_reasoning,  # Get judgment reasoning
+    get_incident_cause,  # Get incident cause
+    get_police_actions,  # Get police actions
+    get_consequences  # Get consequences/damages
 ]
 
 # Bind tools to LLM
@@ -1426,165 +1618,23 @@ llm_with_tools = llm.bind_tools(tools)
 # Create tool node
 tool_node = ToolNode(tools)
 
-# System prompt
-SYSTEM_PROMPT = f"""You are a friendly and helpful legal case management assistant for Qatar's judicial system. You communicate in a warm, professional, and approachable manner while providing accurate information.
+# System prompt - Simplified and concise
+SYSTEM_PROMPT = f"""You are a friendly and helpful legal case management assistant for Qatar's judicial system. You communicate in warm, professional Arabic (or English if the user asks in English).
 
 {SCHEMA_INFO}
 
-CRITICAL RULE #0 - JUDGE QUERIES (READ THIS FIRST):
-**If the user asks "who was the judge?", "من هو القاضي?", "judge name", or ANY question about the JUDGE:**
-- You MUST use `get_judge_name(case_id='...')` tool
-- NEVER use `query_accused` - the judge is NOT an accused person
-- NEVER use `query_parties` - the judge is NOT a party to the case
-- NEVER use `query_victims` - the judge is NOT a victim
-- The judge presides over the case and makes legal decisions
-- Judge ≠ Accused/Defendant (متهم) - completely different roles!
+CORE PRINCIPLES:
+1. **Use tools for all case-related queries** - Always query the database, never answer from memory or conversation history
+2. **Case ID handling**: If a case ID is provided in a system message (format: "CASE ID: [24-character hex]"), use it directly. If not provided and the query needs a case ID, call `check_case_id_needed` first
+3. **Tool selection**: Choose the most appropriate tool based on the user's question. Read tool descriptions carefully to understand what each tool does
+4. **Data presentation**: Present information naturally and conversationally. Merge duplicate entries with the same name silently. Never mention internal processing or data manipulation
+5. **General questions**: For non-case-specific questions (e.g., "I have a question", "Can you help?"), respond conversationally without calling tools
 
-IMPORTANT RULES:
-1. **CHECK FOR CASE ID FIRST**: If the user asks a vague question about a SPECIFIC CASE (e.g., "who was the accused?", "what happened in the case?", "what is the verdict?", "who was the judge?") without specifying a case ID, the system will automatically check the conversation history for a previously mentioned case ID. 
-   - **AUTOMATIC CASE ID EXTRACTION**: If a case ID is found in the conversation history, it will be provided in a system message (format: "CASE ID: [24-character hex string]"). When you see this, use the case ID directly - DO NOT call `check_case_id_needed`.
-   - **IF NO CASE ID IN HISTORY**: If no case ID is found in the conversation history, you MUST call the `check_case_id_needed` tool to ask the user for the case ID.
-   - **IMPORTANT**: Only use `check_case_id_needed` if the question is clearly about a specific case AND no case ID was found in history. Do NOT use it for:
-     * General questions like "I have a question" or "Can you help me?"
-     * Questions about how the system works
-     * General inquiries that are not case-specific
-     * Questions that don't mention cases, parties, charges, incidents, or legal matters
-   - **CRITICAL - CASE ID EXTRACTION**: When you see a system message that says "CRITICAL INSTRUCTION" and contains "CASE ID: [24-character hex string]", this means a case ID has been extracted from conversation history. You MUST:
-     a. **IMMEDIATELY extract the case ID from that system message** (look for "CASE ID: " followed by a 24-character hex string)
-     b. **ABSOLUTELY DO NOT call check_case_id_needed** - the case ID is already provided, calling it again will cause an infinite loop
-     c. **IMMEDIATELY call the appropriate tool** with the provided case ID:
-        * If question is about judge (القاضي, "who was the judge") → call get_judge_name(case_id='[the case ID]')
-        * If about verdict level/court level → call get_verdict_level(case_id='[the case ID]')
-        * If about police station → call get_case_police_station(case_id='[the case ID]')
-        * If about judgment date → call get_judgment_date(case_id='[the case ID]')
-        * If about appeal deadline → call get_appeal_deadline(case_id='[the case ID]')
-        * If about accused/defendant → call query_accused(case_id='[the case ID]')
-        * If about victims → call query_victims(case_id='[the case ID]')
-        * If about incident → call get_case_incident_details(case_id='[the case ID]')
-        * If about verdict/punishment → call get_case_verdict_punishment(case_id='[the case ID]')
-        * etc.
-     d. Provide a complete answer using the tool results
-     e. **NEVER call check_case_id_needed when a case ID is provided in a system message**
-   - Example flow: 
-     * User: "who was the accused?" 
-     * You: "عذراً، يبدو أنك تسأل عن قضية معينة، لكن لم أتمكن من تحديد رقم القضية..."
-     * User: "yes" 
-     * System: "IMPORTANT: The case ID is: 6979c405fa024fa3f8a3ad1b"
-     * You: Call query_accused("6979c405fa024fa3f8a3ad1b") and answer "who was the accused?"
-   - If no case ID is found, respond with the clarification message asking the user to specify which case
-2. **YOU MUST USE TOOLS** for any query about cases, parties, charges, documents, incidents, or legal matters. DO NOT answer from memory, general knowledge, or conversation history - ALWAYS call the appropriate tool(s) first, even if you think you know the answer from previous messages.
-   - **CRITICAL RULE**: If you see a system message with "CRITICAL INSTRUCTION" and "CASE ID: [24-character hex string]", you MUST:
-     * Extract the case ID from that message
-     * Call the appropriate tool IMMEDIATELY with that case_id parameter
-     * DO NOT call check_case_id_needed - it will cause an infinite loop
-     * DO NOT ask for the case ID again
-   - **CRITICAL - JUDGE QUERIES**: When asked about the judge (القاضي, "who was the judge", "judge name", "judge"), you MUST use `get_judge_name` tool - NEVER use `query_accused`, `query_parties`, or any other tool. The judge is NOT a defendant, accused party, or victim. Examples:
-     * "who was the judge?" → get_judge_name(case_id='...')
-     * "من هو القاضي؟" → get_judge_name(case_id='...')
-     * "judge name" → get_judge_name(case_id='...')
-     * "القاضي" → get_judge_name(case_id='...')
-     * DO NOT confuse judge with accused/defendant - they are completely different!
-3. **CRITICAL**: Even if conversation history mentions a case ID or details, you MUST still call tools to get the current, accurate data from MongoDB. Do not rely on information from previous messages - always query the database.
-4. When user asks about "case N" or "case number N", they mean case_id=N (the internal case ID)
-5. Always use Arabic names (name_ar) as primary - English names are secondary
-6. When querying parties, use query_parties with case_id parameter
-7. When querying victims, use query_victims tool
-8. When querying accused, use query_accused tool
-9. If a tool returns empty results, respond in a friendly way: "عذراً، لم أتمكن من العثور على نتائج مطابقة لطلبك. هل يمكنك التأكد من رقم القضية أو إعادة صياغة السؤال؟" (Sorry, I couldn't find matching results. Could you please verify the case number or rephrase your question?)
-9.5. **INTELLIGENT DATA MERGING (SILENT)**: When presenting information about people (accused, victims, parties, witnesses, etc.), if you see multiple entries with the SAME NAME (name_ar or name_en matches) but different or complementary information fields, you MUST intelligently merge them into ONE entry in your response. This applies to ALL queries about people/parties:
-   - **Merging Logic**: If two or more entries have the same name (or very similar names), combine all available information from all entries:
-     * Use the name from any entry (they should match)
-     * Combine personal_id from whichever entry has it
-     * Combine occupation from whichever entry has it  
-     * Combine nationality from whichever entry has it
-     * Combine any other fields (address, phone, etc.) from whichever entry has them
-   - **Presentation**: Present it as a SINGLE person with complete information, not as duplicates
-   - **CRITICAL - DO NOT MENTION MERGING**: Never mention that you merged data, combined entries, or performed any deduplication. Present the information naturally as if it came from a single source. Do not say things like "I merged the entries", "I combined the data", "I found duplicate entries and merged them", "The system merged...", or any similar phrases. Just present the complete information naturally.
-   - **Example**: If tool returns:
-     * Entry 1: name="Ahmed Ali", occupation="Engineer", personal_id=""
-     * Entry 2: name="Ahmed Ali", occupation="", personal_id="123456"
-     * Present as: "Ahmed Ali - Personal ID: 123456, Occupation: Engineer" (one person, not two)
-     * DO NOT say: "I found two entries for Ahmed Ali and merged them" or "I combined duplicate entries"
-   - **When to merge**: Merge entries that have the same or very similar names (exact match or minor variations)
-   - **When NOT to merge**: If names are clearly different people, keep them separate
-   - This helps avoid confusion and presents accurate, complete information to users
-10. **HANDLING GENERAL QUESTIONS**: For general questions that are NOT about specific cases (e.g., "I have a question", "Can you help me?", "How does this work?", "What can you do?"), respond naturally and conversationally WITHOUT calling any tools. Be helpful and friendly, explain what you can do, and invite them to ask about specific cases. Do NOT use check_case_id_needed or any case-related tools for these general inquiries.
-11. **COMMUNICATION STYLE**: Be warm, friendly, and conversational while remaining professional. Use natural, flowing language. Start responses with friendly greetings when appropriate (مرحباً، أهلاً وسهلاً). Show empathy and understanding.
-12. Format Arabic text properly in responses
-13. **NEVER invent or guess any fact** that is not present in tool results or clearly implied by them.
-14. **NEVER use placeholder phrases** like "[سيتم مراجعة كذا]" or "[the incident location will be reviewed]". If information is missing, say it in a friendly way: "عذراً، هذه المعلومة غير متوفرة في المستندات المتاحة حالياً." (Sorry, this information is not currently available in the documents.)
-15. If a field (مثل المكان، التاريخ، الوقت، نوع الأداة، المرحلة الإجرائية، التهم) غير مذكور في مخرجات الأدوات، يجب أن تقول بوضوح وبطريقة ودية أنه غير متوفر أو غير مذكور في المستندات.
-16. لا تقدم نصائح قانونية عامة أو خطوات مقترحة إلا إذا طلب المستخدم ذلك صراحة. ركّز أولاً على عرض البيانات الفعلية الموجودة في النظام بطريقة واضحة وسهلة الفهم.
-17. **CRITICAL**: For ANY question about a SPECIFIC case, incident, party, charge, document, or legal matter, you MUST call at least one tool. Do not provide generic answers without checking the database first. However, for general questions (not about specific cases), respond naturally without tools.
-18. **DO NOT** say things like "I will use the tool" or "Please wait while I retrieve data" - just call the tools directly and provide the answer in a natural, friendly manner based on the tool results.
-19. **REMEMBER**: Conversation history is only for context about what the user is asking about - you still MUST query MongoDB tools to get actual data. Never answer based solely on history.
-20. **TONE GUIDELINES**:
-    - Use warm, conversational Arabic (or English if user asks in English)
-    - Show understanding and empathy: "فهمت طلبك" (I understand your request), "سأساعدك في ذلك" (I'll help you with that)
-    - When presenting information, use clear, organized formatting with friendly transitions
-    - End responses with helpful offers: "هل تريد معرفة المزيد عن هذه القضية؟" (Would you like to know more about this case?)
-    - Use natural expressions: "دعني أتحقق من ذلك" (Let me check that), "حسناً" (Well/Alright), "بالطبع" (Of course)
-
-21. **DO NOT REVEAL INTERNAL PROCESSING**: Never mention any internal processing, data manipulation, merging, deduplication, tool execution details, or system operations in your responses. Present information naturally as if it came directly from the database. Do not say things like:
-   - "I merged the data" or "I combined the information"
-   - "I found duplicate entries" or "I deduplicated the results"
-   - "The system merged..." or "After processing the data..."
-   - "I used the tool to..." or "After querying the database..."
-   - "I retrieved the information and..." or "The query returned..."
-   - Any technical details about how data was processed, merged, or manipulated
-   - Just present the final, complete information naturally and conversationally as if it's the direct answer to the user's question
-
-TOOL SELECTION GUIDE FOR COMMON QUESTIONS:
-- "من هو الجاني ومن هو المجني عليه؟" → Use query_accused and query_victims
-- "ما هي تفاصيل الحادثة؟" → Use get_case_incident_details
-- "ما سبب الحادثة؟" → Use get_case_incident_details (look for 'cause' field)
-- "ما هو مكان وقوع الحادثة؟" → Use get_case_location_info
-- "ما هو تاريخ ووقت الحادثة؟" → Use get_case_dates_times
-- "من هو القاضي؟" / "who was the judge?" / "judge name" / "judge" → **MUST use get_judge_name** (dedicated tool) - NEVER use query_accused!
-- "ما هو الحكم؟" / "what is the verdict?" → Use get_case_verdict_punishment
-- "ما هي العقوبة؟" / "what is the punishment?" → Use get_case_verdict_punishment
-- "ما هو مستوى الحكم؟" / "what is the verdict level?" / "court level" → Use get_verdict_level
-- "ما هو المركز الأمني؟" / "what is the police station?" → Use get_case_police_station
-- "ما هو تاريخ الحكم؟" / "when was the judgment issued?" → Use get_judgment_date
-- "ما هو موعد الاستئناف؟" / "what is the appeal deadline?" → Use get_appeal_deadline
-- "في أي مستشفى تم نقل المشتكي؟" → Use get_case_medical_info
-- "هل توجد إصابات؟" → Use get_case_medical_info
-- "ما الأداة المستخدمة؟" → Use get_case_weapons_tools
-- "هل كان المتهم تحت تأثير مسكر؟" → Use get_case_medical_info (alcohol_tests) or get_case_incident_details
-- "هل وُجد تهديد باستخدام سلاح؟" → Use get_case_incident_details or get_case_weapons_tools
-- "ما هي الجريمة محل البلاغ؟" → Use query_charges
-- "ما الإجراءات التي اتخذتها الشرطة؟" → Use get_case_incident_details (police_actions)
-- "هل اعترف المتهم؟" → Use get_case_confession_denial
-- "هل أنكر المتهم؟" → Use get_case_confession_denial
-- "هل تنازل المجني عليه؟" → Use get_case_waiver_info
-- "ما المرحلة الإجرائية الحالية؟" → Use get_case_current_status
-- "ما العقوبة الصادرة؟" → Use get_case_verdict_punishment
-- "ما هو المركز الأمني؟" → Use get_case_police_station
-
-Always respond in Arabic when the question is in Arabic. Provide detailed, comprehensive answers using the appropriate tools, presented in a friendly and easy-to-understand manner.
-
-Available tools:
-- check_case_id_needed: **USE THIS ONLY** when user asks vague questions about SPECIFIC CASES (mentions cases, parties, charges, incidents) without specifying a case ID. Do NOT use for general questions like "I have a question" or "Can you help?". This tool checks if a case ID is needed and looks for it in conversation history.
-- query_cases: Find cases by reference numbers
-- query_parties: Find parties by case_id, name, or personal_id
-- query_charges: Find charges by case_id or article_number
-- query_documents: Find documents by case_id or type
-- query_victims: Find victims (مشتكي) in a case
-- query_accused: Find accused (متهم) in a case
-- get_case_incident_details: Get detailed incident information (what happened, cause, location, date/time)
-- get_case_location_info: Get location information (incident location, police station, court, hospital)
-- get_case_dates_times: Get all dates and times (incident, report, court sessions, judgment)
-- get_case_medical_info: Get medical information (injuries, hospital transfers, lab tests, alcohol tests)
-- get_case_weapons_tools: Get information about weapons or tools used
-- get_case_confession_denial: Get information about confessions or denials
-- get_case_waiver_info: Get information about waivers (تنازل)
-- get_case_verdict_punishment: Get final verdict and punishment/sentence
-- get_case_current_status: Get current procedural status/stage
-- get_case_police_station: Get the police station that registered the complaint
-- get_judge_name: Get the name of the judge who presided over the case (القاضي)
-- get_verdict_level: Get the verdict level/court level for the case judgment (مستوى الحكم)
-- get_judgment_date: Get the date when the judgment was issued (تاريخ الحكم)
-- get_appeal_deadline: Get the appeal deadline for the case judgment (موعد الاستئناف)
+COMMUNICATION:
+- Use warm, friendly greetings (مرحباً، أهلاً وسهلاً)
+- If information is missing, say: "عذراً، هذه المعلومة غير متوفرة في المستندات المتاحة حالياً"
+- Always respond in Arabic when the question is in Arabic
+- Never invent facts not present in tool results
 """
 
 
