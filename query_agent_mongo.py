@@ -1284,8 +1284,10 @@ SYSTEM_PROMPT = f"""You are a friendly and helpful legal case management assista
 {SCHEMA_INFO}
 
 IMPORTANT RULES:
-1. **CHECK FOR CASE ID FIRST**: If the user asks a vague question about a SPECIFIC CASE (e.g., "who was the accused?", "what happened in the case?", "what is the verdict?") without specifying a case ID, you MUST FIRST call the `check_case_id_needed` tool. 
-   - **IMPORTANT**: Only use this tool if the question is clearly about a specific case. Do NOT use it for:
+1. **CHECK FOR CASE ID FIRST**: If the user asks a vague question about a SPECIFIC CASE (e.g., "who was the accused?", "what happened in the case?", "what is the verdict?", "who was the judge?") without specifying a case ID, the system will automatically check the conversation history for a previously mentioned case ID. 
+   - **AUTOMATIC CASE ID EXTRACTION**: If a case ID is found in the conversation history, it will be provided in a system message (format: "CASE ID: [24-character hex string]"). When you see this, use the case ID directly - DO NOT call `check_case_id_needed`.
+   - **IF NO CASE ID IN HISTORY**: If no case ID is found in the conversation history, you MUST call the `check_case_id_needed` tool to ask the user for the case ID.
+   - **IMPORTANT**: Only use `check_case_id_needed` if the question is clearly about a specific case AND no case ID was found in history. Do NOT use it for:
      * General questions like "I have a question" or "Can you help me?"
      * Questions about how the system works
      * General inquiries that are not case-specific
@@ -1432,13 +1434,16 @@ def create_agent():
                 case_id_already_extracted = True
                 break
         
-        # Check if user said "yes" or similar confirmation - if so, extract case ID from history
+        # Get the last user message
         last_user_msg = None
+        last_user_msg_content = None
         for msg in reversed(state["messages"]):
             if isinstance(msg, HumanMessage):
                 last_user_msg = msg.content.lower().strip()
+                last_user_msg_content = msg.content
                 break
         
+        # Check if user said "yes" or similar confirmation - if so, extract case ID from history
         if not case_id_already_extracted and last_user_msg and any(keyword in last_user_msg for keyword in ["yes", "نعم", "ok", "حسناً", "تمام", "موافق"]):
             # User confirmed - check if we need to extract case ID
             case_id = _extract_case_id_from_messages(state["messages"])
@@ -1460,6 +1465,41 @@ def create_agent():
                 else:
                     hint_msg = SystemMessage(content=f"IMPORTANT: The user confirmed to use the case ID from earlier conversation.\n\nCASE ID: {case_id}\n\nLook at the conversation history to find the original question and use this case ID ({case_id}) to answer it. DO NOT call check_case_id_needed again - the case ID is already provided above.")
                 messages = [SystemMessage(content=SYSTEM_PROMPT), hint_msg] + [m for m in state["messages"] if not isinstance(m, SystemMessage)]
+        
+        # PROACTIVE CASE ID EXTRACTION: If user asks a case-related question without a case ID,
+        # check if there's a case ID in the conversation history BEFORE calling the LLM
+        elif not case_id_already_extracted and last_user_msg_content:
+            # Check if the query is case-related (similar logic to check_case_id_needed)
+            case_keywords = [
+                "case", "قضية", "دعوى", "ملف", "verdict", "حكم", "judgment",
+                "party", "طرف", "متهم", "مشتكي", "victim", "accused",
+                "charge", "جريمة", "مادة", "اتهام",
+                "incident", "حادثة", "document", "مستند",
+                "court", "محكمة", "prosecution", "نيابة", "police", "شرطة",
+                "judge", "قاضي"
+            ]
+            case_phrases = [
+                "who was the", "من هو", "من هي",
+                "what happened in the case", "ماذا حدث في القضية",
+                "which case", "أي قضية",
+                "the accused", "المتهم",
+                "the victim", "المجني عليه", "المشتكي"
+            ]
+            has_case_keyword = any(keyword in last_user_msg.lower() for keyword in case_keywords)
+            has_case_phrase = any(phrase in last_user_msg.lower() for phrase in case_phrases)
+            
+            # Check if query contains a case ID
+            import re
+            case_id_pattern = r'\b[0-9a-fA-F]{24}\b'
+            case_ids_in_query = re.findall(case_id_pattern, last_user_msg_content)
+            
+            # If it's a case-related query without a case ID, check history
+            if (has_case_keyword or has_case_phrase) and not case_ids_in_query:
+                case_id = _extract_case_id_from_messages(state["messages"])
+                if case_id:
+                    logger.info(f"✅ Proactively extracted case ID from conversation history for query: {last_user_msg_content[:50]}...")
+                    hint_msg = SystemMessage(content=f"IMPORTANT: The user asked a case-related question without specifying a case ID, but a case ID was found in the conversation history.\n\nCASE ID: {case_id}\n\nCURRENT QUESTION: '{last_user_msg_content}'\n\nYou MUST now call the appropriate tool with this case ID ({case_id}) to answer the question. DO NOT call check_case_id_needed - the case ID is already provided above.")
+                    messages = [SystemMessage(content=SYSTEM_PROMPT), hint_msg] + [m for m in state["messages"] if not isinstance(m, SystemMessage)]
         
         response = llm_with_tools.invoke(messages)
         # Append the response to existing messages (don't replace!)
