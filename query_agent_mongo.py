@@ -1151,7 +1151,7 @@ def get_case_waiver_info(case_id: str) -> str:
 
 @tool
 def get_case_verdict_punishment(case_id: str) -> str:
-    """Get final verdict and punishment/sentence for a case."""
+    """Get final verdict, punishment/sentence, and judge name for a case. Use this tool when asked about the judge (القاضي), verdict (الحكم), or punishment (العقوبة)."""
     try:
         with MongoManager(**CONFIG['mongodb']) as mongo:
             documents_collection = mongo.db['documents']
@@ -1295,10 +1295,11 @@ IMPORTANT RULES:
      b. **DO NOT call check_case_id_needed again** - the case ID is already provided, calling it again will cause a loop
      c. Find the ORIGINAL question in the conversation (the question that was asked BEFORE the clarification request)
      d. Call the appropriate tool DIRECTLY with the extracted case ID:
-        * If original question was about accused → call query_accused(case_id)
+        * If original question was about accused/defendant → call query_accused(case_id)
         * If about victims → call query_victims(case_id)
         * If about incident → call get_case_incident_details(case_id)
-        * If about verdict → call get_case_verdict_punishment(case_id)
+        * If about verdict/punishment → call get_case_verdict_punishment(case_id)
+        * If about judge (القاضي, "who was the judge") → call get_case_verdict_punishment(case_id) - NOT query_accused
         * etc.
      e. Provide a complete answer to the original question using the tool results
      f. **NEVER ask for the case ID again** once it's been provided in a system message
@@ -1311,6 +1312,7 @@ IMPORTANT RULES:
    - If no case ID is found, respond with the clarification message asking the user to specify which case
 2. **YOU MUST USE TOOLS** for any query about cases, parties, charges, documents, incidents, or legal matters. DO NOT answer from memory, general knowledge, or conversation history - ALWAYS call the appropriate tool(s) first, even if you think you know the answer from previous messages.
    - **EXCEPTION**: If a system message already provides a case ID (format: "CASE ID: [24-character hex string]"), DO NOT call check_case_id_needed again. Use the provided case ID directly.
+   - **IMPORTANT - JUDGE QUERIES**: When asked about the judge (القاضي, "who was the judge", "judge name"), use `get_case_verdict_punishment` tool - NOT `query_accused` or `query_parties`. The judge is NOT a defendant or accused party.
 3. **CRITICAL**: Even if conversation history mentions a case ID or details, you MUST still call tools to get the current, accurate data from MongoDB. Do not rely on information from previous messages - always query the database.
 4. When user asks about "case N" or "case number N", they mean case_id=N (the internal case ID)
 5. Always use Arabic names (name_ar) as primary - English names are secondary
@@ -1367,6 +1369,9 @@ TOOL SELECTION GUIDE FOR COMMON QUESTIONS:
 - "ما سبب الحادثة؟" → Use get_case_incident_details (look for 'cause' field)
 - "ما هو مكان وقوع الحادثة؟" → Use get_case_location_info
 - "ما هو تاريخ ووقت الحادثة؟" → Use get_case_dates_times
+- "من هو القاضي؟" / "who was the judge?" → Use get_case_verdict_punishment (judge_name field)
+- "ما هو الحكم؟" / "what is the verdict?" → Use get_case_verdict_punishment
+- "ما هي العقوبة؟" / "what is the punishment?" → Use get_case_verdict_punishment
 - "في أي مستشفى تم نقل المشتكي؟" → Use get_case_medical_info
 - "هل توجد إصابات؟" → Use get_case_medical_info
 - "ما الأداة المستخدمة؟" → Use get_case_weapons_tools
