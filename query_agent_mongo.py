@@ -1257,6 +1257,138 @@ def get_case_police_station(case_id: str) -> str:
         return f"Error: {str(e)}"
 
 
+@tool
+def get_judge_name(case_id: str) -> str:
+    """Get the name of the judge who presided over the case. Use this tool when asked about the judge (القاضي, "who was the judge", "judge name")."""
+    try:
+        with MongoManager(**CONFIG['mongodb']) as mongo:
+            documents_collection = mongo.db['documents']
+            
+            # Get court judgment document
+            judgment_docs = list(documents_collection.find({
+                'case_id': ObjectId(case_id),
+                'document_type': 'court_judgment'
+            }).sort('created_at', -1))
+            
+            if not judgment_docs:
+                return json.dumps({'message': 'No judgment found for this case yet, so judge name is not available.'}, ensure_ascii=False)
+            
+            # Get most recent judgment
+            judgment = judgment_docs[0]
+            entities = judgment.get('extracted_entities', {}) or {}
+            judge_name = entities.get('judge_name')
+            
+            return json.dumps({
+                'judge_name': judge_name,
+                'judgment_date': entities.get('judgment_date'),
+                'judgment_file': judgment.get('file_name')
+            }, indent=2, ensure_ascii=False)
+    
+    except Exception as e:
+        logger.error(f"Error getting judge name: {e}", exc_info=True)
+        return f"Error: {str(e)}"
+
+
+@tool
+def get_verdict_level(case_id: str) -> str:
+    """Get the verdict level/court level for the case judgment. Use this tool when asked about the court level (مستوى الحكم, "verdict level", "court level")."""
+    try:
+        with MongoManager(**CONFIG['mongodb']) as mongo:
+            documents_collection = mongo.db['documents']
+            
+            # Get court judgment document
+            judgment_docs = list(documents_collection.find({
+                'case_id': ObjectId(case_id),
+                'document_type': 'court_judgment'
+            }).sort('created_at', -1))
+            
+            if not judgment_docs:
+                return json.dumps({'message': 'No judgment found for this case yet, so verdict level is not available.'}, ensure_ascii=False)
+            
+            # Get most recent judgment
+            judgment = judgment_docs[0]
+            entities = judgment.get('extracted_entities', {}) or {}
+            
+            # Check for verdict_level, court_level, or judgment_level in entities
+            verdict_level = (entities.get('verdict_level') or 
+                            entities.get('court_level') or 
+                            entities.get('judgment_level') or
+                            entities.get('court_name'))  # Sometimes court name indicates level
+            
+            return json.dumps({
+                'verdict_level': verdict_level,
+                'judgment_date': entities.get('judgment_date'),
+                'judgment_file': judgment.get('file_name')
+            }, indent=2, ensure_ascii=False)
+    
+    except Exception as e:
+        logger.error(f"Error getting verdict level: {e}", exc_info=True)
+        return f"Error: {str(e)}"
+
+
+@tool
+def get_judgment_date(case_id: str) -> str:
+    """Get the date when the judgment was issued. Use this tool when asked about judgment date (تاريخ الحكم, "judgment date", "when was the verdict issued")."""
+    try:
+        with MongoManager(**CONFIG['mongodb']) as mongo:
+            documents_collection = mongo.db['documents']
+            
+            # Get court judgment document
+            judgment_docs = list(documents_collection.find({
+                'case_id': ObjectId(case_id),
+                'document_type': 'court_judgment'
+            }).sort('created_at', -1))
+            
+            if not judgment_docs:
+                return json.dumps({'message': 'No judgment found for this case yet, so judgment date is not available.'}, ensure_ascii=False)
+            
+            # Get most recent judgment
+            judgment = judgment_docs[0]
+            entities = judgment.get('extracted_entities', {}) or {}
+            judgment_date = entities.get('judgment_date')
+            
+            return json.dumps({
+                'judgment_date': judgment_date,
+                'judgment_file': judgment.get('file_name')
+            }, indent=2, ensure_ascii=False)
+    
+    except Exception as e:
+        logger.error(f"Error getting judgment date: {e}", exc_info=True)
+        return f"Error: {str(e)}"
+
+
+@tool
+def get_appeal_deadline(case_id: str) -> str:
+    """Get the appeal deadline for the case judgment. Use this tool when asked about appeal deadline (موعد الاستئناف, "appeal deadline", "when can I appeal")."""
+    try:
+        with MongoManager(**CONFIG['mongodb']) as mongo:
+            documents_collection = mongo.db['documents']
+            
+            # Get court judgment document
+            judgment_docs = list(documents_collection.find({
+                'case_id': ObjectId(case_id),
+                'document_type': 'court_judgment'
+            }).sort('created_at', -1))
+            
+            if not judgment_docs:
+                return json.dumps({'message': 'No judgment found for this case yet, so appeal deadline is not available.'}, ensure_ascii=False)
+            
+            # Get most recent judgment
+            judgment = judgment_docs[0]
+            entities = judgment.get('extracted_entities', {}) or {}
+            appeal_deadline = entities.get('appeal_deadline')
+            
+            return json.dumps({
+                'appeal_deadline': appeal_deadline,
+                'judgment_date': entities.get('judgment_date'),
+                'judgment_file': judgment.get('file_name')
+            }, indent=2, ensure_ascii=False)
+    
+    except Exception as e:
+        logger.error(f"Error getting appeal deadline: {e}", exc_info=True)
+        return f"Error: {str(e)}"
+
+
 # Create tools list
 tools = [
     check_case_id_needed,  # Check if case ID is needed (should be called first for vague queries)
@@ -1275,7 +1407,11 @@ tools = [
     get_case_waiver_info,
     get_case_verdict_punishment,
     get_case_current_status,
-    get_case_police_station
+    get_case_police_station,
+    get_judge_name,  # Dedicated tool for judge name
+    get_verdict_level,  # Dedicated tool for verdict/court level
+    get_judgment_date,  # Dedicated tool for judgment date
+    get_appeal_deadline  # Dedicated tool for appeal deadline
 ]
 
 # Bind tools to LLM
@@ -1302,7 +1438,11 @@ IMPORTANT RULES:
      a. **IMMEDIATELY extract the case ID from that system message** (look for "CASE ID: " followed by a 24-character hex string)
      b. **ABSOLUTELY DO NOT call check_case_id_needed** - the case ID is already provided, calling it again will cause an infinite loop
      c. **IMMEDIATELY call the appropriate tool** with the provided case ID:
-        * If question is about judge (القاضي, "who was the judge") → call get_case_verdict_punishment(case_id='[the case ID]')
+        * If question is about judge (القاضي, "who was the judge") → call get_judge_name(case_id='[the case ID]')
+        * If about verdict level/court level → call get_verdict_level(case_id='[the case ID]')
+        * If about police station → call get_case_police_station(case_id='[the case ID]')
+        * If about judgment date → call get_judgment_date(case_id='[the case ID]')
+        * If about appeal deadline → call get_appeal_deadline(case_id='[the case ID]')
         * If about accused/defendant → call query_accused(case_id='[the case ID]')
         * If about victims → call query_victims(case_id='[the case ID]')
         * If about incident → call get_case_incident_details(case_id='[the case ID]')
@@ -1323,7 +1463,7 @@ IMPORTANT RULES:
      * Call the appropriate tool IMMEDIATELY with that case_id parameter
      * DO NOT call check_case_id_needed - it will cause an infinite loop
      * DO NOT ask for the case ID again
-   - **IMPORTANT - JUDGE QUERIES**: When asked about the judge (القاضي, "who was the judge", "judge name"), use `get_case_verdict_punishment` tool - NOT `query_accused` or `query_parties`. The judge is NOT a defendant or accused party.
+   - **IMPORTANT - JUDGE QUERIES**: When asked about the judge (القاضي, "who was the judge", "judge name"), use `get_judge_name` tool - NOT `query_accused` or `query_parties`. The judge is NOT a defendant or accused party.
 3. **CRITICAL**: Even if conversation history mentions a case ID or details, you MUST still call tools to get the current, accurate data from MongoDB. Do not rely on information from previous messages - always query the database.
 4. When user asks about "case N" or "case number N", they mean case_id=N (the internal case ID)
 5. Always use Arabic names (name_ar) as primary - English names are secondary
@@ -1380,9 +1520,13 @@ TOOL SELECTION GUIDE FOR COMMON QUESTIONS:
 - "ما سبب الحادثة؟" → Use get_case_incident_details (look for 'cause' field)
 - "ما هو مكان وقوع الحادثة؟" → Use get_case_location_info
 - "ما هو تاريخ ووقت الحادثة؟" → Use get_case_dates_times
-- "من هو القاضي؟" / "who was the judge?" → Use get_case_verdict_punishment (judge_name field)
+- "من هو القاضي؟" / "who was the judge?" → Use get_judge_name (dedicated tool)
 - "ما هو الحكم؟" / "what is the verdict?" → Use get_case_verdict_punishment
 - "ما هي العقوبة؟" / "what is the punishment?" → Use get_case_verdict_punishment
+- "ما هو مستوى الحكم؟" / "what is the verdict level?" / "court level" → Use get_verdict_level
+- "ما هو المركز الأمني؟" / "what is the police station?" → Use get_case_police_station
+- "ما هو تاريخ الحكم؟" / "when was the judgment issued?" → Use get_judgment_date
+- "ما هو موعد الاستئناف؟" / "what is the appeal deadline?" → Use get_appeal_deadline
 - "في أي مستشفى تم نقل المشتكي؟" → Use get_case_medical_info
 - "هل توجد إصابات؟" → Use get_case_medical_info
 - "ما الأداة المستخدمة؟" → Use get_case_weapons_tools
@@ -1417,6 +1561,10 @@ Available tools:
 - get_case_verdict_punishment: Get final verdict and punishment/sentence
 - get_case_current_status: Get current procedural status/stage
 - get_case_police_station: Get the police station that registered the complaint
+- get_judge_name: Get the name of the judge who presided over the case (القاضي)
+- get_verdict_level: Get the verdict level/court level for the case judgment (مستوى الحكم)
+- get_judgment_date: Get the date when the judgment was issued (تاريخ الحكم)
+- get_appeal_deadline: Get the appeal deadline for the case judgment (موعد الاستئناف)
 """
 
 
