@@ -907,6 +907,88 @@ def _create_chat_wrapper(llm, monitoring_handler):
 # Initialize LLM
 llm = _get_llm()
 
+# Helper function to extract hospital/lab names from document text and entities
+def _extract_hospital_lab_from_text(doc_text: str = None, entities: dict = None) -> dict:
+    """
+    Extract hospital and lab names from document text using pattern matching.
+    Also checks entities.locations.hospital if provided.
+    Returns dict with 'hospital' and 'lab_name' keys.
+    """
+    import re
+    result = {'hospital': None, 'lab_name': None}
+    
+    # First, check entities.locations.hospital if available
+    if entities:
+        locations = entities.get('locations', {})
+        if isinstance(locations, dict):
+            if locations.get('hospital'):
+                result['hospital'] = locations.get('hospital')
+            # Also check direct hospital fields in entities
+            if not result['hospital']:
+                result['hospital'] = entities.get('hospital') or entities.get('hospital_name')
+        # Check lab_name in entities
+        result['lab_name'] = entities.get('lab_name')
+    
+    # If we already found both, return early
+    if result['hospital'] and result['lab_name']:
+        return result
+    
+    # If no text provided, return what we found in entities
+    if not doc_text:
+        return result
+    
+    text = str(doc_text)
+    
+    # Common hospital name patterns in Arabic and English
+    # Look for patterns like "مستشفى [name]", "hospital [name]", "نقل إلى [name]", etc.
+    hospital_patterns = [
+        r'مستشفى\s+([^\s،,\.\n]+(?:\s+[^\s،,\.\n]+){0,4})',  # مستشفى followed by name (up to 4 words)
+        r'نقل\s+إلى\s+([^\s،,\.\n]+(?:\s+[^\s،,\.\n]+){0,4})',  # نقل إلى followed by name
+        r'نقل\s+ل[ي]?\s+([^\s،,\.\n]+(?:\s+[^\s،,\.\n]+){0,4})',  # نقل لي/ل followed by name
+        r'تم\s+نقل\s+([^\s،,\.\n]+(?:\s+[^\s،,\.\n]+){0,4})\s+إلى\s+مستشفى',  # تم نقل [name] إلى مستشفى
+        r'hospital\s+([^\s،,\.\n]+(?:\s+[^\s،,\.\n]+){0,4})',  # hospital followed by name
+        r'المستشفى\s+([^\s،,\.\n]+(?:\s+[^\s،,\.\n]+){0,4})',  # المستشفى followed by name
+        r'في\s+مستشفى\s+([^\s،,\.\n]+(?:\s+[^\s،,\.\n]+){0,4})',  # في مستشفى followed by name
+    ]
+    
+    # Lab name patterns
+    lab_patterns = [
+        r'مختبر\s+([^\s،,\.\n]+(?:\s+[^\s،,\.\n]+){0,4})',  # مختبر followed by name
+        r'المختبر\s+([^\s،,\.\n]+(?:\s+[^\s،,\.\n]+){0,4})',  # المختبر followed by name
+        r'في\s+مختبر\s+([^\s،,\.\n]+(?:\s+[^\s،,\.\n]+){0,4})',  # في مختبر followed by name
+        r'lab\s+([^\s،,\.\n]+(?:\s+[^\s،,\.\n]+){0,4})',  # lab followed by name
+        r'laboratory\s+([^\s،,\.\n]+(?:\s+[^\s،,\.\n]+){0,4})',  # laboratory followed by name
+    ]
+    
+    # Try to find hospital name (only if not already found)
+    if not result['hospital']:
+        for pattern in hospital_patterns:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                hospital_name = match.group(1).strip()
+                # Clean up common suffixes and punctuation
+                hospital_name = re.sub(r'[،,\.\n:;].*$', '', hospital_name)
+                hospital_name = hospital_name.strip()
+                if hospital_name and len(hospital_name) > 2:
+                    result['hospital'] = hospital_name
+                    break
+    
+    # Try to find lab name (only if not already found)
+    if not result['lab_name']:
+        for pattern in lab_patterns:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                lab_name = match.group(1).strip()
+                # Clean up common suffixes and punctuation
+                lab_name = re.sub(r'[،,\.\n:;].*$', '', lab_name)
+                lab_name = lab_name.strip()
+                if lab_name and len(lab_name) > 2:
+                    result['lab_name'] = lab_name
+                    break
+    
+    return result
+
+
 # Additional detailed query tools
 @tool
 def get_case_incident_details(case_id: str) -> str:
@@ -1074,13 +1156,18 @@ def get_case_medical_info(case_id: str) -> str:
             for doc in docs:
                 entities = doc.get('extracted_entities', {}) or {}
                 doc_type = doc.get('document_type', '')
+                doc_text = doc.get('text', '') or ''
+                
+                # Try to extract hospital/lab names from entities and text
+                text_extracted = _extract_hospital_lab_from_text(doc_text, entities)
                 
                 if doc_type == 'lab_test_results':
                     test_info = {
                         'test_date': entities.get('test_date'),
                         'test_type': entities.get('test_type'),
                         'result': entities.get('result'),
-                        'subject': entities.get('subject_party', {}).get('name_ar') if isinstance(entities.get('subject_party'), dict) else None
+                        'subject': entities.get('subject_party', {}).get('name_ar') if isinstance(entities.get('subject_party'), dict) else None,
+                        'lab_name': entities.get('lab_name') or text_extracted.get('lab_name')
                     }
                     if entities.get('test_type') == 'alcohol' or 'كحول' in str(entities.get('test_type', '')):
                         medical_info['alcohol_tests'].append(test_info)
@@ -1098,9 +1185,12 @@ def get_case_medical_info(case_id: str) -> str:
                 elif doc_type in ['police_complaint', 'police_statement']:
                     if entities.get('injuries'):
                         medical_info['injuries'].append({'description': entities.get('injuries')})
-                    if entities.get('hospital') or entities.get('hospital_name'):
+                    
+                    # Check entities first, then fallback to text extraction
+                    hospital_name = entities.get('hospital') or entities.get('hospital_name') or text_extracted.get('hospital')
+                    if hospital_name:
                         medical_info['hospital_transfers'].append({
-                            'hospital': entities.get('hospital') or entities.get('hospital_name'),
+                            'hospital': hospital_name,
                             'reason': entities.get('hospital_reason_ar') or entities.get('transfer_reason_ar')
                         })
             
@@ -1130,12 +1220,17 @@ def get_lab_records(case_id: str) -> str:
             lab_records = []
             for doc in docs:
                 entities = doc.get('extracted_entities', {}) or {}
+                doc_text = doc.get('text', '') or ''
+                
+                # Try to extract lab name from entities and text
+                text_extracted = _extract_hospital_lab_from_text(doc_text, entities)
+                
                 record = {
                     'test_date': entities.get('test_date'),
                     'test_type': entities.get('test_type'),
                     'result': entities.get('result'),
                     'subject': entities.get('subject_party', {}).get('name_ar') if isinstance(entities.get('subject_party'), dict) else None,
-                    'lab_name': entities.get('lab_name'),
+                    'lab_name': entities.get('lab_name') or text_extracted.get('lab_name'),
                     'test_method': entities.get('test_method'),
                     'document': doc.get('file_name')
                 }
@@ -1167,6 +1262,11 @@ def get_medical_records(case_id: str) -> str:
             medical_records = []
             for doc in docs:
                 entities = doc.get('extracted_entities', {}) or {}
+                doc_text = doc.get('text', '') or ''
+                
+                # Try to extract hospital name from entities and text
+                text_extracted = _extract_hospital_lab_from_text(doc_text, entities)
+                
                 record = {
                     'report_date': entities.get('report_date'),
                     'examination_date': entities.get('examination_date'),
@@ -1176,6 +1276,7 @@ def get_medical_records(case_id: str) -> str:
                     'injuries': entities.get('injuries'),
                     'examiner': entities.get('examiner_name'),
                     'subject': entities.get('subject_party', {}).get('name_ar') if isinstance(entities.get('subject_party'), dict) else None,
+                    'hospital': entities.get('hospital') or entities.get('hospital_name') or text_extracted.get('hospital'),
                     'document': doc.get('file_name')
                 }
                 medical_records.append(record)
