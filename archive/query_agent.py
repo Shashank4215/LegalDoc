@@ -1240,7 +1240,7 @@ def create_agent():
     
     # Initialize LLM with Groq
     import os
-    groq_api_key = os.getenv('GROQ_API_KEY', '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')
+    groq_api_key = os.getenv('GROQ_API_KEY', '')
     if not groq_api_key:
         raise ValueError("GROQ_API_KEY environment variable is required. Set it with: export GROQ_API_KEY='your-key'")
     

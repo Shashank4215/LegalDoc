@@ -1899,7 +1899,7 @@ def main():
     """Example usage of AI-powered document processor"""
     
     # Configuration
-    ANTHROPIC_API_KEY = "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"
+    ANTHROPIC_API_KEY = ""
     
     DB_CONFIG = {
         'host': 'localhost',

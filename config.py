@@ -26,11 +26,11 @@ DATABASE_CONFIG_LEGACY = {
 }
 
 # Anthropic API Configuration
-ANTHROPIC_API_KEY = os.getenv('ANTHROPIC_API_KEY', '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')
+ANTHROPIC_API_KEY = os.getenv('ANTHROPIC_API_KEY', '')
 ANTHROPIC_MODEL = os.getenv('ANTHROPIC_MODEL', 'claude-sonnet-4-20250514')
 
 # Groq API Configuration (for query agent)
-GROQ_API_KEY = os.getenv('GROQ_API_KEY', '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')
+GROQ_API_KEY = os.getenv('GROQ_API_KEY', '')
 GROQ_MODEL = os.getenv('GROQ_MODEL', 'qwen/qwen3-32b')
 
 # Local LLM Configuration (for Qwen3-14B or other local models)
