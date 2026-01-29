@@ -32,7 +32,7 @@ This document describes the RAG (Retrieval Augmented Generation) system implemen
 - Entity extraction and structured data storage
 - Multi-turn conversational interface
 - Tool-based retrieval with MongoDB integration
-- Local and cloud LLM support (Qwen3-14B / Groq)
+- **Custom fine-tuned LLM model** (self-hosted) for responses and reasoning (no external cloud LLM API dependency)
 
 ---
 
@@ -400,10 +400,10 @@ This document describes the RAG (Retrieval Augmented Generation) system implemen
    - Backend: vLLM or transformers
    - Inference: ~10 seconds per query
 
-2. **Cloud (Groq API)**
-   - No local GPU required
-   - Fast inference (~2-3 seconds)
-   - API-based
+2. **Custom Fine-Tuned LLM (Self-Hosted)**
+   - Model: Custom LLM model fine-tuned for Qatar legal documents
+   - Deployment: Runs on your infrastructure (VM/server), not a cloud LLM API
+   - Access: Local inference (no external API key required for LLM calls)
 
 **Embedding Model:**
 - **Model**: Arabic BERT (768 dimensions)
@@ -437,7 +437,7 @@ This document describes the RAG (Retrieval Augmented Generation) system implemen
 
 **Scaling Considerations:**
 - MongoDB: Horizontal scaling supported
-- LLM: Single instance (local) or API (cloud)
+- LLM: Scale by running additional **self-hosted** inference instances (custom fine-tuned model)
 - Embeddings: CPU-bound, can parallelize
 - API: Stateless, can scale horizontally
 
@@ -471,10 +471,10 @@ This document describes the RAG (Retrieval Augmented Generation) system implemen
 - **Authentication**: None (open access)
 - **Authorization**: None (all documents accessible)
 - **Encryption**: MongoDB connection (optional TLS)
-- **API Keys**: Stored in environment variables
+- **LLM**: **Custom fine-tuned model** is self-hosted (no cloud LLM API keys required)
 
 **Data Protection:**
-- API keys stored securely in configuration files (not in source code)
+- Any secrets (database credentials, service tokens) stored securely in environment variables / configuration (not in source code)
 - Database credentials managed through environment variables
 - File storage on secure local filesystem
 
@@ -529,7 +529,7 @@ This document describes the RAG (Retrieval Augmented Generation) system implemen
 - ✅ Chat interface (React frontend)
 - ✅ Session management
 - ✅ Local LLM support (Qwen3-14B)
-- ✅ Cloud LLM support (Groq API)
+- ✅ **Custom fine-tuned LLM model** (self-hosted) support
 - ✅ Single-port deployment
 - ✅ ngrok support
 - ✅ Intelligent data merging
@@ -726,7 +726,7 @@ This document describes the RAG (Retrieval Augmented Generation) system implemen
 - AI agent framework for intelligent query processing
 - Machine learning libraries for text embeddings
 - Custom LLM model for entity extraction
-- Large language model support (local or cloud-based)
+- **Custom fine-tuned LLM model** for response generation (self-hosted)
 
 **Frontend Technologies:**
 - Modern React-based user interface
@@ -742,7 +742,7 @@ This document describes the RAG (Retrieval Augmented Generation) system implemen
 
 **Configuration Areas:**
 - **Database**: MongoDB connection settings (host, port, database name)
-- **LLM**: Local or cloud LLM selection, model paths, API keys
+- **LLM**: **Custom fine-tuned LLM model** configuration (model paths, inference runtime settings)
 - **Embeddings**: Model selection, device configuration (CPU/GPU)
 - **Similarity Search**: Threshold settings, maximum document limits
 - **All settings**: Configurable via environment variables for flexible deployment

@@ -10,13 +10,20 @@ from datetime import datetime
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import Response, FileResponse
+from fastapi.responses import Response, FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 import os
+import json
+import asyncio
 
 from mongo_manager import MongoManager
 from config import CONFIG
 from chat_service import generate_chat_response
+
+# Suppress verbose HTTP client logs (httpx, httpcore)
+import logging
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 
 class ChatMessageDTO(BaseModel):
@@ -234,6 +241,72 @@ def chat(req: ChatRequest):
         session_id=result["session_id"],
         session=session,
         messages=messages,
+    )
+
+
+@app.post("/api/chat/stream")
+async def chat_stream(req: ChatRequest):
+    """
+    Streaming chat endpoint using Server-Sent Events (SSE).
+    Streams the LLM response token by token.
+    """
+    if not req.message.strip():
+        raise HTTPException(status_code=400, detail="Message cannot be empty")
+
+    from langchain_core.messages import HumanMessage
+    from mongo_manager import MongoManager
+    
+    async def event_generator():
+        session_id = req.session_id or ""
+        full_response = ""
+        
+        try:
+            with MongoManager(**CONFIG["mongodb"]) as mongo:
+                # Create session if needed
+                if not session_id:
+                    session_id = mongo.create_chat_session(user_id=req.user_id)
+                
+                # Persist user message
+                mongo.append_chat_message(session_id, "user", req.message)
+                
+                # Get conversation history
+                history = mongo.get_session_messages(session_id)
+                user_history = []
+                for msg in history:
+                    if msg.get("role") == "user":
+                        user_history.append(HumanMessage(content=msg.get("content", "")))
+                
+                # Import streaming query
+                from query_agent_mongo import query_stream
+                
+                # Stream the response
+                async for chunk in query_stream(req.message, conversation_history=user_history):
+                    if chunk:
+                        full_response += chunk
+                        # Send as SSE
+                        yield f"data: {json.dumps({'type': 'token', 'content': chunk})}\n\n"
+                
+                # Persist complete assistant message
+                mongo.append_chat_message(session_id, "assistant", full_response)
+                
+                # Send completion event
+                session_doc = mongo.get_chat_session(session_id)
+                yield f"data: {json.dumps({'type': 'done', 'session_id': session_id, 'session': {'id': session_id, 'title': session_doc.get('title', 'New Chat') if session_doc else 'New Chat'}})}\n\n"
+                
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Error in streaming chat: {e}", exc_info=True)
+            yield f"data: {json.dumps({'type': 'error', 'content': 'حدث خطأ أثناء معالجة طلبك.'})}\n\n"
+    
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",  # Disable nginx buffering
+        }
     )
 
 

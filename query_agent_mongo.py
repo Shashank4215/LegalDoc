@@ -714,7 +714,7 @@ def _get_llm_transformers(monitoring_handler):
 def _create_chat_wrapper(llm, monitoring_handler):
     """Create a chat model wrapper for LangGraph compatibility"""
     from langchain_core.language_models.chat_models import BaseChatModel
-    from langchain_core.outputs import ChatGeneration, ChatResult
+    from langchain_core.outputs import ChatGeneration, ChatResult, ChatGenerationChunk
     from langchain_core.messages import AIMessage
     
     class ChatModelWrapper(BaseChatModel):
@@ -742,6 +742,29 @@ def _create_chat_wrapper(llm, monitoring_handler):
             generation = ChatGeneration(message=message)
             
             return ChatResult(generations=[generation])
+        
+        async def _astream(self, messages, stop=None, run_manager=None, **kwargs):
+            """Stream response from messages"""
+            # Convert messages to prompt using Qwen3 format
+            prompt = self._messages_to_prompt(messages)
+            
+            # Check if underlying LLM supports streaming
+            if hasattr(self.llm, 'stream'):
+                # Stream from underlying LLM
+                full_content = ""
+                async for chunk in self.llm.stream(prompt, stop=stop):
+                    if isinstance(chunk, str):
+                        content = chunk
+                    else:
+                        content = str(chunk)
+                    if content:
+                        full_content += content
+                        yield ChatGenerationChunk(message=AIMessage(content=content))
+            else:
+                # Fallback to non-streaming
+                response_text = self.llm.invoke(prompt, stop=stop)
+                content = response_text if isinstance(response_text, str) else str(response_text)
+                yield ChatGenerationChunk(message=AIMessage(content=content))
         
         def _messages_to_prompt(self, messages):
             """Convert messages to Qwen3 chat format"""
@@ -1258,7 +1281,7 @@ IMPORTANT RULES:
 7. When querying victims, use query_victims tool
 8. When querying accused, use query_accused tool
 9. If a tool returns empty results, respond in a friendly way: "عذراً، لم أتمكن من العثور على نتائج مطابقة لطلبك. هل يمكنك التأكد من رقم القضية أو إعادة صياغة السؤال؟" (Sorry, I couldn't find matching results. Could you please verify the case number or rephrase your question?)
-9.5. **INTELLIGENT DATA MERGING**: When presenting information about people (accused, victims, parties, witnesses, etc.), if you see multiple entries with the SAME NAME (name_ar or name_en matches) but different or complementary information fields, you MUST intelligently merge them into ONE entry in your response. This applies to ALL queries about people/parties:
+9.5. **INTELLIGENT DATA MERGING (SILENT)**: When presenting information about people (accused, victims, parties, witnesses, etc.), if you see multiple entries with the SAME NAME (name_ar or name_en matches) but different or complementary information fields, you MUST intelligently merge them into ONE entry in your response. This applies to ALL queries about people/parties:
    - **Merging Logic**: If two or more entries have the same name (or very similar names), combine all available information from all entries:
      * Use the name from any entry (they should match)
      * Combine personal_id from whichever entry has it
@@ -1266,10 +1289,12 @@ IMPORTANT RULES:
      * Combine nationality from whichever entry has it
      * Combine any other fields (address, phone, etc.) from whichever entry has them
    - **Presentation**: Present it as a SINGLE person with complete information, not as duplicates
+   - **CRITICAL - DO NOT MENTION MERGING**: Never mention that you merged data, combined entries, or performed any deduplication. Present the information naturally as if it came from a single source. Do not say things like "I merged the entries", "I combined the data", "I found duplicate entries and merged them", "The system merged...", or any similar phrases. Just present the complete information naturally.
    - **Example**: If tool returns:
      * Entry 1: name="Ahmed Ali", occupation="Engineer", personal_id=""
      * Entry 2: name="Ahmed Ali", occupation="", personal_id="123456"
      * Present as: "Ahmed Ali - Personal ID: 123456, Occupation: Engineer" (one person, not two)
+     * DO NOT say: "I found two entries for Ahmed Ali and merged them" or "I combined duplicate entries"
    - **When to merge**: Merge entries that have the same or very similar names (exact match or minor variations)
    - **When NOT to merge**: If names are clearly different people, keep them separate
    - This helps avoid confusion and presents accurate, complete information to users
@@ -1288,6 +1313,15 @@ IMPORTANT RULES:
     - When presenting information, use clear, organized formatting with friendly transitions
     - End responses with helpful offers: "هل تريد معرفة المزيد عن هذه القضية؟" (Would you like to know more about this case?)
     - Use natural expressions: "دعني أتحقق من ذلك" (Let me check that), "حسناً" (Well/Alright), "بالطبع" (Of course)
+
+20. **DO NOT REVEAL INTERNAL PROCESSING**: Never mention any internal processing, data manipulation, merging, deduplication, tool execution details, or system operations in your responses. Present information naturally as if it came directly from the database. Do not say things like:
+   - "I merged the data" or "I combined the information"
+   - "I found duplicate entries" or "I deduplicated the results"
+   - "The system merged..." or "After processing the data..."
+   - "I used the tool to..." or "After querying the database..."
+   - "I retrieved the information and..." or "The query returned..."
+   - Any technical details about how data was processed, merged, or manipulated
+   - Just present the final, complete information naturally and conversationally as if it's the direct answer to the user's question
 
 TOOL SELECTION GUIDE FOR COMMON QUESTIONS:
 - "من هو الجاني ومن هو المجني عليه؟" → Use query_accused and query_victims
@@ -1386,6 +1420,75 @@ def create_agent():
 
 # Create agent instance
 agent = create_agent()
+
+
+async def query_stream(user_query: str, conversation_history: Optional[List] = None):
+    """
+    Execute a natural language query with streaming support.
+    Yields tokens as they are generated.
+    
+    Args:
+        user_query: The user's question/query
+        conversation_history: Optional list of LangChain messages (HumanMessage/AIMessage) for context
+    
+    Yields:
+        str: Tokens/chunks of the response as they are generated
+    """
+    try:
+        logger.info(f"Executing streaming query: {user_query[:100]}...")
+        
+        # Build messages list with conversation history if provided
+        messages_list = []
+        if conversation_history:
+            messages_list.extend(conversation_history)
+            logger.info(f"Using {len(conversation_history)} messages from conversation history")
+        
+        # Add current query
+        messages_list.append(HumanMessage(content=user_query))
+        
+        logger.info(f"Streaming agent with {len(messages_list)} messages total")
+        
+        # Stream events from the agent using astream_events
+        full_response = ""
+        async for event in agent.astream_events(
+            {
+                "messages": messages_list,
+                "query": user_query,
+                "results": None,
+                "error": None
+            },
+            version="v2"
+        ):
+            # Stream LLM token generation events
+            if event.get("event") == "on_chat_model_stream":
+                chunk = event.get("data", {}).get("chunk", {})
+                if hasattr(chunk, "content") and chunk.content:
+                    content = chunk.content if isinstance(chunk.content, str) else str(chunk.content)
+                    if content:
+                        full_response += content
+                        yield content
+            
+            # Handle final AIMessage after tool execution
+            elif event.get("event") == "on_chain_end":
+                name = event.get("name", "")
+                if name == "agent":
+                    output = event.get("data", {}).get("output", {})
+                    if output and "messages" in output:
+                        for msg in output["messages"]:
+                            if isinstance(msg, AIMessage) and hasattr(msg, "content"):
+                                content = msg.content if isinstance(msg.content, str) else str(msg.content)
+                                # Yield any remaining content that wasn't streamed
+                                if content and len(content) > len(full_response):
+                                    remaining = content[len(full_response):]
+                                    if remaining:
+                                        yield remaining
+                                        full_response = content
+        
+        logger.info(f"✅ Streaming completed (total length: {len(full_response)})")
+        
+    except Exception as e:
+        logger.error(f"Error in streaming query: {e}", exc_info=True)
+        yield f"Error: {str(e)}"
 
 
 def query(user_query: str, conversation_history: Optional[List] = None) -> str:
