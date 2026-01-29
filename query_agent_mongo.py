@@ -2074,8 +2074,9 @@ def create_agent():
                         suggested_tools.append("query_accused")
                     if any(kw in question_lower for kw in ["victim", "complainant", "مشتكي", "المجني عليه"]):
                         suggested_tools.append("query_victims")
-                    # Judge check must be VERY specific - only if judge is explicitly mentioned in the question
-                    if ("judge" in question_lower or "قاضي" in question_lower) and ("who was the judge" in question_lower or "من هو القاضي" in question_lower or "judge name" in question_lower):
+                    # Judge check: if judge is mentioned and question asks "who", suggest get_judge_name
+                    # This handles "who was the judge?", "who is the judge", "من هو القاضي", etc.
+                    if ("judge" in question_lower or "قاضي" in question_lower) and ("who" in question_lower or "من هو" in question_lower or "من هي" in question_lower):
                         suggested_tools.append("get_judge_name")
                     if any(kw in question_lower for kw in ["verdict", "حكم"]):
                         suggested_tools.append("get_case_verdict_punishment")
@@ -2155,8 +2156,9 @@ def create_agent():
                             suggested_tools.append("query_accused")
                         if any(keyword in question_lower for keyword in ["victim", "complainant", "مشتكي", "المجني عليه"]):
                             suggested_tools.append("query_victims")
-                        # Judge check must be VERY specific - only if judge is explicitly mentioned in the question
-                        if ("judge" in question_lower or "قاضي" in question_lower) and ("who was the judge" in question_lower or "من هو القاضي" in question_lower or "judge name" in question_lower):
+                        # Judge check: if judge is mentioned and question asks "who", suggest get_judge_name
+                        # This handles "who was the judge?", "who is the judge", "من هو القاضي", etc.
+                        if ("judge" in question_lower or "قاضي" in question_lower) and ("who" in question_lower or "من هو" in question_lower or "من هي" in question_lower):
                             suggested_tools.append("get_judge_name")
                         if any(keyword in question_lower for keyword in ["verdict level", "court level", "مستوى الحكم"]):
                             suggested_tools.append("get_verdict_level")
