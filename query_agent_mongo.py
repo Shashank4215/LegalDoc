@@ -538,16 +538,31 @@ def check_case_id_needed(query: str) -> str:
         query_lower = query.lower().strip()
         is_confirmation = any(keyword in query_lower for keyword in confirmation_keywords)
         
-        # Case-related keywords
+        # Case-related keywords (more specific - removed generic words like "who", "what", "which")
+        # Only trigger if query contains actual case-related terms
         case_keywords = [
             "case", "قضية", "دعوى", "ملف", "verdict", "حكم", "judgment",
             "party", "طرف", "متهم", "مشتكي", "victim", "accused",
             "charge", "جريمة", "مادة", "اتهام",
             "incident", "حادثة", "document", "مستند",
-            "who", "من", "what", "ماذا", "which", "أي"
+            "court", "محكمة", "prosecution", "نيابة", "police", "شرطة"
         ]
         
-        is_case_query = any(keyword in query_lower for keyword in case_keywords) or is_confirmation
+        # Check for case-related context (not just generic questions)
+        # Require at least one case-specific keyword, not just "who" or "what"
+        has_case_keyword = any(keyword in query_lower for keyword in case_keywords)
+        
+        # Also check for case-related phrases (more specific)
+        case_phrases = [
+            "who was the", "من هو", "من هي",
+            "what happened in the case", "ماذا حدث في القضية",
+            "which case", "أي قضية",
+            "the accused", "المتهم",
+            "the victim", "المجني عليه", "المشتكي"
+        ]
+        has_case_phrase = any(phrase in query_lower for phrase in case_phrases)
+        
+        is_case_query = (has_case_keyword or has_case_phrase) or is_confirmation
         
         if not is_case_query:
             return json.dumps({
@@ -1258,7 +1273,13 @@ SYSTEM_PROMPT = f"""You are a friendly and helpful legal case management assista
 {SCHEMA_INFO}
 
 IMPORTANT RULES:
-1. **CHECK FOR CASE ID FIRST**: If the user asks a vague question about a case (e.g., "who was the accused?", "what happened?", "what is the verdict?") without specifying a case ID, you MUST FIRST call the `check_case_id_needed` tool. This tool will:
+1. **CHECK FOR CASE ID FIRST**: If the user asks a vague question about a SPECIFIC CASE (e.g., "who was the accused?", "what happened in the case?", "what is the verdict?") without specifying a case ID, you MUST FIRST call the `check_case_id_needed` tool. 
+   - **IMPORTANT**: Only use this tool if the question is clearly about a specific case. Do NOT use it for:
+     * General questions like "I have a question" or "Can you help me?"
+     * Questions about how the system works
+     * General inquiries that are not case-specific
+     * Questions that don't mention cases, parties, charges, incidents, or legal matters
+   - This tool will:
    - Check if a case ID is present in the query or conversation history
    - If the user says "yes", "نعم", "ok", "حسناً" after being asked for a case ID, the system will automatically extract the case ID from conversation history
    - **CRITICAL**: When a case ID is found in conversation history (you'll see a system message with "IMPORTANT: The user confirmed to use the case ID from earlier conversation. The case ID is: XXX"), you MUST:
@@ -1298,23 +1319,24 @@ IMPORTANT RULES:
    - **When to merge**: Merge entries that have the same or very similar names (exact match or minor variations)
    - **When NOT to merge**: If names are clearly different people, keep them separate
    - This helps avoid confusion and presents accurate, complete information to users
-10. **COMMUNICATION STYLE**: Be warm, friendly, and conversational while remaining professional. Use natural, flowing language. Start responses with friendly greetings when appropriate (مرحباً، أهلاً وسهلاً). Show empathy and understanding.
-11. Format Arabic text properly in responses
-12. **NEVER invent or guess any fact** that is not present in tool results or clearly implied by them.
-13. **NEVER use placeholder phrases** like "[سيتم مراجعة كذا]" or "[the incident location will be reviewed]". If information is missing, say it in a friendly way: "عذراً، هذه المعلومة غير متوفرة في المستندات المتاحة حالياً." (Sorry, this information is not currently available in the documents.)
-14. If a field (مثل المكان، التاريخ، الوقت، نوع الأداة، المرحلة الإجرائية، التهم) غير مذكور في مخرجات الأدوات، يجب أن تقول بوضوح وبطريقة ودية أنه غير متوفر أو غير مذكور في المستندات.
-15. لا تقدم نصائح قانونية عامة أو خطوات مقترحة إلا إذا طلب المستخدم ذلك صراحة. ركّز أولاً على عرض البيانات الفعلية الموجودة في النظام بطريقة واضحة وسهلة الفهم.
-16. **CRITICAL**: For ANY question about a case, incident, party, charge, document, or legal matter, you MUST call at least one tool. Do not provide generic answers without checking the database first.
-17. **DO NOT** say things like "I will use the tool" or "Please wait while I retrieve data" - just call the tools directly and provide the answer in a natural, friendly manner based on the tool results.
-18. **REMEMBER**: Conversation history is only for context about what the user is asking about - you still MUST query MongoDB tools to get actual data. Never answer based solely on history.
-19. **TONE GUIDELINES**:
+10. **HANDLING GENERAL QUESTIONS**: For general questions that are NOT about specific cases (e.g., "I have a question", "Can you help me?", "How does this work?", "What can you do?"), respond naturally and conversationally WITHOUT calling any tools. Be helpful and friendly, explain what you can do, and invite them to ask about specific cases. Do NOT use check_case_id_needed or any case-related tools for these general inquiries.
+11. **COMMUNICATION STYLE**: Be warm, friendly, and conversational while remaining professional. Use natural, flowing language. Start responses with friendly greetings when appropriate (مرحباً، أهلاً وسهلاً). Show empathy and understanding.
+12. Format Arabic text properly in responses
+13. **NEVER invent or guess any fact** that is not present in tool results or clearly implied by them.
+14. **NEVER use placeholder phrases** like "[سيتم مراجعة كذا]" or "[the incident location will be reviewed]". If information is missing, say it in a friendly way: "عذراً، هذه المعلومة غير متوفرة في المستندات المتاحة حالياً." (Sorry, this information is not currently available in the documents.)
+15. If a field (مثل المكان، التاريخ، الوقت، نوع الأداة، المرحلة الإجرائية، التهم) غير مذكور في مخرجات الأدوات، يجب أن تقول بوضوح وبطريقة ودية أنه غير متوفر أو غير مذكور في المستندات.
+16. لا تقدم نصائح قانونية عامة أو خطوات مقترحة إلا إذا طلب المستخدم ذلك صراحة. ركّز أولاً على عرض البيانات الفعلية الموجودة في النظام بطريقة واضحة وسهلة الفهم.
+17. **CRITICAL**: For ANY question about a SPECIFIC case, incident, party, charge, document, or legal matter, you MUST call at least one tool. Do not provide generic answers without checking the database first. However, for general questions (not about specific cases), respond naturally without tools.
+18. **DO NOT** say things like "I will use the tool" or "Please wait while I retrieve data" - just call the tools directly and provide the answer in a natural, friendly manner based on the tool results.
+19. **REMEMBER**: Conversation history is only for context about what the user is asking about - you still MUST query MongoDB tools to get actual data. Never answer based solely on history.
+20. **TONE GUIDELINES**:
     - Use warm, conversational Arabic (or English if user asks in English)
     - Show understanding and empathy: "فهمت طلبك" (I understand your request), "سأساعدك في ذلك" (I'll help you with that)
     - When presenting information, use clear, organized formatting with friendly transitions
     - End responses with helpful offers: "هل تريد معرفة المزيد عن هذه القضية؟" (Would you like to know more about this case?)
     - Use natural expressions: "دعني أتحقق من ذلك" (Let me check that), "حسناً" (Well/Alright), "بالطبع" (Of course)
 
-20. **DO NOT REVEAL INTERNAL PROCESSING**: Never mention any internal processing, data manipulation, merging, deduplication, tool execution details, or system operations in your responses. Present information naturally as if it came directly from the database. Do not say things like:
+21. **DO NOT REVEAL INTERNAL PROCESSING**: Never mention any internal processing, data manipulation, merging, deduplication, tool execution details, or system operations in your responses. Present information naturally as if it came directly from the database. Do not say things like:
    - "I merged the data" or "I combined the information"
    - "I found duplicate entries" or "I deduplicated the results"
    - "The system merged..." or "After processing the data..."
@@ -1346,7 +1368,7 @@ TOOL SELECTION GUIDE FOR COMMON QUESTIONS:
 Always respond in Arabic when the question is in Arabic. Provide detailed, comprehensive answers using the appropriate tools, presented in a friendly and easy-to-understand manner.
 
 Available tools:
-- check_case_id_needed: **USE THIS FIRST** when user asks vague questions about cases without specifying a case ID. This tool checks if a case ID is needed and looks for it in conversation history.
+- check_case_id_needed: **USE THIS ONLY** when user asks vague questions about SPECIFIC CASES (mentions cases, parties, charges, incidents) without specifying a case ID. Do NOT use for general questions like "I have a question" or "Can you help?". This tool checks if a case ID is needed and looks for it in conversation history.
 - query_cases: Find cases by reference numbers
 - query_parties: Find parties by case_id, name, or personal_id
 - query_charges: Find charges by case_id or article_number
