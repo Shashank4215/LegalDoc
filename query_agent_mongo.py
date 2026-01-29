@@ -1259,7 +1259,13 @@ def get_case_police_station(case_id: str) -> str:
 
 @tool
 def get_judge_name(case_id: str) -> str:
-    """Get the name of the judge who presided over the case. Use this tool when asked about the judge (القاضي, "who was the judge", "judge name")."""
+    """Get the name of the judge who presided over the case. 
+    
+    CRITICAL: Use this tool ONLY when asked about the JUDGE (القاضي). 
+    - Keywords: "judge", "who was the judge", "judge name", "القاضي", "من هو القاضي"
+    - DO NOT use this for accused/defendant (متهم) - use query_accused instead
+    - DO NOT use this for victims (مشتكي) - use query_victims instead
+    - The judge is the person who makes the legal decision, NOT a party to the case."""
     try:
         with MongoManager(**CONFIG['mongodb']) as mongo:
             documents_collection = mongo.db['documents']
@@ -1425,6 +1431,15 @@ SYSTEM_PROMPT = f"""You are a friendly and helpful legal case management assista
 
 {SCHEMA_INFO}
 
+CRITICAL RULE #0 - JUDGE QUERIES (READ THIS FIRST):
+**If the user asks "who was the judge?", "من هو القاضي?", "judge name", or ANY question about the JUDGE:**
+- You MUST use `get_judge_name(case_id='...')` tool
+- NEVER use `query_accused` - the judge is NOT an accused person
+- NEVER use `query_parties` - the judge is NOT a party to the case
+- NEVER use `query_victims` - the judge is NOT a victim
+- The judge presides over the case and makes legal decisions
+- Judge ≠ Accused/Defendant (متهم) - completely different roles!
+
 IMPORTANT RULES:
 1. **CHECK FOR CASE ID FIRST**: If the user asks a vague question about a SPECIFIC CASE (e.g., "who was the accused?", "what happened in the case?", "what is the verdict?", "who was the judge?") without specifying a case ID, the system will automatically check the conversation history for a previously mentioned case ID. 
    - **AUTOMATIC CASE ID EXTRACTION**: If a case ID is found in the conversation history, it will be provided in a system message (format: "CASE ID: [24-character hex string]"). When you see this, use the case ID directly - DO NOT call `check_case_id_needed`.
@@ -1463,7 +1478,12 @@ IMPORTANT RULES:
      * Call the appropriate tool IMMEDIATELY with that case_id parameter
      * DO NOT call check_case_id_needed - it will cause an infinite loop
      * DO NOT ask for the case ID again
-   - **IMPORTANT - JUDGE QUERIES**: When asked about the judge (القاضي, "who was the judge", "judge name"), use `get_judge_name` tool - NOT `query_accused` or `query_parties`. The judge is NOT a defendant or accused party.
+   - **CRITICAL - JUDGE QUERIES**: When asked about the judge (القاضي, "who was the judge", "judge name", "judge"), you MUST use `get_judge_name` tool - NEVER use `query_accused`, `query_parties`, or any other tool. The judge is NOT a defendant, accused party, or victim. Examples:
+     * "who was the judge?" → get_judge_name(case_id='...')
+     * "من هو القاضي؟" → get_judge_name(case_id='...')
+     * "judge name" → get_judge_name(case_id='...')
+     * "القاضي" → get_judge_name(case_id='...')
+     * DO NOT confuse judge with accused/defendant - they are completely different!
 3. **CRITICAL**: Even if conversation history mentions a case ID or details, you MUST still call tools to get the current, accurate data from MongoDB. Do not rely on information from previous messages - always query the database.
 4. When user asks about "case N" or "case number N", they mean case_id=N (the internal case ID)
 5. Always use Arabic names (name_ar) as primary - English names are secondary
@@ -1520,7 +1540,7 @@ TOOL SELECTION GUIDE FOR COMMON QUESTIONS:
 - "ما سبب الحادثة؟" → Use get_case_incident_details (look for 'cause' field)
 - "ما هو مكان وقوع الحادثة؟" → Use get_case_location_info
 - "ما هو تاريخ ووقت الحادثة؟" → Use get_case_dates_times
-- "من هو القاضي؟" / "who was the judge?" → Use get_judge_name (dedicated tool)
+- "من هو القاضي؟" / "who was the judge?" / "judge name" / "judge" → **MUST use get_judge_name** (dedicated tool) - NEVER use query_accused!
 - "ما هو الحكم؟" / "what is the verdict?" → Use get_case_verdict_punishment
 - "ما هي العقوبة؟" / "what is the punishment?" → Use get_case_verdict_punishment
 - "ما هو مستوى الحكم؟" / "what is the verdict level?" / "court level" → Use get_verdict_level
@@ -1661,7 +1681,23 @@ def create_agent():
                 case_id = _extract_case_id_from_messages(state["messages"])
                 if case_id:
                     logger.info(f"✅ Proactively extracted case ID from conversation history for query: {last_user_msg_content[:50]}...")
-                    hint_msg = SystemMessage(content=f"CRITICAL INSTRUCTION: The user asked a case-related question without specifying a case ID, but a case ID was found in the conversation history.\n\nCASE ID: {case_id}\n\nCURRENT QUESTION: '{last_user_msg_content}'\n\nYOU MUST IMMEDIATELY call the appropriate tool (e.g., get_case_verdict_punishment for judge queries, query_accused for accused queries, etc.) with case_id='{case_id}' to answer the question. DO NOT call check_case_id_needed - the case ID is provided above.")
+                    # Determine which tool to use based on the question
+                    question_lower = last_user_msg_content.lower()
+                    tool_hint = ""
+                    if any(keyword in question_lower for keyword in ["judge", "قاضي", "who was the judge"]):
+                        tool_hint = "get_judge_name(case_id='{case_id}')"
+                    elif any(keyword in question_lower for keyword in ["accused", "defendant", "متهم", "الجاني"]):
+                        tool_hint = "query_accused(case_id='{case_id}')"
+                    elif any(keyword in question_lower for keyword in ["victim", "مشتكي", "المجني عليه"]):
+                        tool_hint = "query_victims(case_id='{case_id}')"
+                    elif any(keyword in question_lower for keyword in ["verdict level", "court level", "مستوى الحكم"]):
+                        tool_hint = "get_verdict_level(case_id='{case_id}')"
+                    elif any(keyword in question_lower for keyword in ["police station", "المركز الأمني"]):
+                        tool_hint = "get_case_police_station(case_id='{case_id}')"
+                    else:
+                        tool_hint = "the appropriate tool"
+                    
+                    hint_msg = SystemMessage(content=f"CRITICAL INSTRUCTION: The user asked a case-related question without specifying a case ID, but a case ID was found in the conversation history.\n\nCASE ID: {case_id}\n\nCURRENT QUESTION: '{last_user_msg_content}'\n\nYOU MUST IMMEDIATELY call {tool_hint} to answer the question. DO NOT call check_case_id_needed - the case ID is provided above.")
                     messages = [SystemMessage(content=SYSTEM_PROMPT), hint_msg] + [m for m in state["messages"] if not isinstance(m, SystemMessage)]
         
         # If case ID was already extracted, make sure it's in the messages
