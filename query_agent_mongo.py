@@ -1625,10 +1625,17 @@ SYSTEM_PROMPT = f"""You are a friendly and helpful legal case management assista
 
 CORE PRINCIPLES:
 1. **Use tools for all case-related queries** - Always query the database, never answer from memory or conversation history
-2. **Case ID handling**: If a case ID is provided in a system message (format: "CASE ID: [24-character hex]"), use it directly. If not provided and the query needs a case ID, call `check_case_id_needed` first
-3. **Tool selection**: Choose the most appropriate tool based on the user's question. Read tool descriptions carefully to understand what each tool does
-4. **Data presentation**: Present information naturally and conversationally. Merge duplicate entries with the same name silently. Never mention internal processing or data manipulation
-5. **General questions**: For non-case-specific questions (e.g., "I have a question", "Can you help?"), respond conversationally without calling tools
+2. **Case ID handling**: 
+   - If a case ID is provided in a system message (format: "CASE ID: [24-character hex]"), extract it and use it IMMEDIATELY with the appropriate tool
+   - If no case ID is provided and the query needs one, call `check_case_id_needed` first
+   - The system automatically extracts case IDs from conversation history when available - use them when provided
+3. **Context awareness**: 
+   - When you see "CASE ID: [id]" in a system message, it means a case ID was found in the conversation history
+   - Use that case ID directly with the appropriate tool - do NOT call `check_case_id_needed` again
+   - Look at the conversation history to understand what the user is asking about
+4. **Tool selection**: Choose the most appropriate tool based on the user's question. Read tool descriptions carefully to understand what each tool does
+5. **Data presentation**: Present information naturally and conversationally. Merge duplicate entries with the same name silently. Never mention internal processing or data manipulation
+6. **General questions**: For non-case-specific questions (e.g., "I have a question", "Can you help?"), respond conversationally without calling tools
 
 COMMUNICATION:
 - Use warm, friendly greetings (مرحباً، أهلاً وسهلاً)
@@ -1694,9 +1701,23 @@ def create_agent():
                 
                 # Add a clear, explicit hint message with the case ID prominently displayed
                 if original_question:
-                    hint_msg = SystemMessage(content=f"CRITICAL INSTRUCTION: The user confirmed to use a case ID from earlier conversation.\n\nCASE ID: {case_id}\n\nORIGINAL QUESTION: '{original_question}'\n\nYOU MUST IMMEDIATELY call the appropriate tool (e.g., get_case_verdict_punishment, query_accused, etc.) with case_id='{case_id}' to answer the original question. DO NOT call check_case_id_needed - the case ID is provided above.")
+                    # Determine which tool based on original question
+                    question_lower = original_question.lower()
+                    tool_suggestion = "the appropriate tool"
+                    if any(kw in question_lower for kw in ["judge", "قاضي", "who was the judge"]):
+                        tool_suggestion = "get_judge_name"
+                    elif any(kw in question_lower for kw in ["accused", "defendant", "متهم", "الجاني"]):
+                        tool_suggestion = "query_accused"
+                    elif any(kw in question_lower for kw in ["victim", "مشتكي", "المجني عليه"]):
+                        tool_suggestion = "query_victims"
+                    elif any(kw in question_lower for kw in ["verdict", "حكم"]):
+                        tool_suggestion = "get_case_verdict_punishment"
+                    elif any(kw in question_lower for kw in ["incident", "حادثة"]):
+                        tool_suggestion = "get_case_incident_details"
+                    
+                    hint_msg = SystemMessage(content=f"CONTEXT: The user confirmed to use a case ID from earlier conversation.\n\nCASE ID: {case_id}\n\nORIGINAL QUESTION: '{original_question}'\n\nACTION REQUIRED: Call {tool_suggestion}(case_id='{case_id}') to answer the question. The case ID is already provided - do NOT call check_case_id_needed.")
                 else:
-                    hint_msg = SystemMessage(content=f"CRITICAL INSTRUCTION: The user confirmed to use a case ID from earlier conversation.\n\nCASE ID: {case_id}\n\nLook at the conversation history to find the original question and IMMEDIATELY call the appropriate tool with case_id='{case_id}'. DO NOT call check_case_id_needed - the case ID is provided above.")
+                    hint_msg = SystemMessage(content=f"CONTEXT: The user confirmed to use a case ID from earlier conversation.\n\nCASE ID: {case_id}\n\nACTION REQUIRED: Look at the conversation history to find the original question, then call the appropriate tool with case_id='{case_id}'. The case ID is already provided - do NOT call check_case_id_needed.")
                 messages = [SystemMessage(content=SYSTEM_PROMPT), hint_msg] + [m for m in state["messages"] if not isinstance(m, SystemMessage)]
         
         # PROACTIVE CASE ID EXTRACTION: If user asks a case-related question without a case ID,
@@ -1747,13 +1768,13 @@ def create_agent():
                     else:
                         tool_hint = "the appropriate tool"
                     
-                    hint_msg = SystemMessage(content=f"CRITICAL INSTRUCTION: The user asked a case-related question without specifying a case ID, but a case ID was found in the conversation history.\n\nCASE ID: {case_id}\n\nCURRENT QUESTION: '{last_user_msg_content}'\n\nYOU MUST IMMEDIATELY call {tool_hint} to answer the question. DO NOT call check_case_id_needed - the case ID is provided above.")
+                    hint_msg = SystemMessage(content=f"CONTEXT: A case ID was found in the conversation history.\n\nCASE ID: {case_id}\n\nCURRENT QUESTION: '{last_user_msg_content}'\n\nACTION REQUIRED: Call {tool_hint.format(case_id=case_id)} to answer the question. The case ID is already provided - do NOT call check_case_id_needed.")
                     messages = [SystemMessage(content=SYSTEM_PROMPT), hint_msg] + [m for m in state["messages"] if not isinstance(m, SystemMessage)]
         
         # If case ID was already extracted, make sure it's in the messages
         elif case_id_already_extracted and extracted_case_id:
             # Re-inject the case ID instruction to ensure it's used
-            hint_msg = SystemMessage(content=f"CRITICAL INSTRUCTION: A case ID has been extracted from conversation history.\n\nCASE ID: {extracted_case_id}\n\nYOU MUST use this case ID to answer the user's question. Call the appropriate tool with case_id='{extracted_case_id}'. DO NOT call check_case_id_needed.")
+            hint_msg = SystemMessage(content=f"CONTEXT: A case ID has been extracted from conversation history.\n\nCASE ID: {extracted_case_id}\n\nACTION REQUIRED: Use this case ID to answer the user's question. Call the appropriate tool with case_id='{extracted_case_id}'. The case ID is already provided - do NOT call check_case_id_needed.")
             messages = [SystemMessage(content=SYSTEM_PROMPT), hint_msg] + [m for m in state["messages"] if not isinstance(m, SystemMessage) or "CASE ID:" not in str(m.content)]
         
         response = llm_with_tools.invoke(messages)
