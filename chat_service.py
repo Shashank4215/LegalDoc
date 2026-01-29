@@ -131,10 +131,12 @@ def generate_chat_response(
         try:
             if QUERY_AGENT_AVAILABLE:
                 # Use the MongoDB query agent for ALL queries - it has tools and can handle everything
-                # Filter history to only include user messages (not assistant responses)
-                user_history = [msg for msg in history if isinstance(msg, HumanMessage)]
-                logger.info(f"Using mongo_query agent for session {session_id} with {len(user_history)} user history messages")
-                assistant_text = mongo_query(user_message, conversation_history=user_history)
+                # IMPORTANT: Include ALL messages (both user and assistant) so the agent can:
+                # 1. Maintain context across the conversation
+                # 2. Extract case IDs from assistant messages (which may have mentioned them)
+                # 3. Understand the full conversation flow
+                logger.info(f"Using mongo_query agent for session {session_id} with {len(history)} messages from conversation history (includes both user and assistant messages)")
+                assistant_text = mongo_query(user_message, conversation_history=history)
                 
                 # Verify that tools were called (for case-related queries, tools should always be used)
                 # If no tools were called and it's a case-related query, log a warning
