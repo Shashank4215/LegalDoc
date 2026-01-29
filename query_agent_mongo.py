@@ -479,12 +479,14 @@ def _extract_case_id_from_messages(messages: List) -> Optional[str]:
     """
     Extract case ID from a list of LangChain messages.
     Looks for ObjectId pattern (24 hex characters) in message content.
+    Searches in ALL messages (user, assistant, system) to find case IDs.
     Returns the first valid case ID found, or None.
     """
     import re
     case_id_pattern = r'\b[0-9a-fA-F]{24}\b'
     
-    for msg in messages:
+    # Search through all messages (including assistant messages which might have mentioned case IDs)
+    for msg in reversed(messages):  # Search from most recent to oldest
         content = ""
         if hasattr(msg, 'content'):
             content = str(msg.content)
@@ -492,6 +494,10 @@ def _extract_case_id_from_messages(messages: List) -> Optional[str]:
             content = str(msg.get('content', ''))
         else:
             content = str(msg)
+        
+        # Skip system messages that are just prompts
+        if isinstance(msg, SystemMessage) and "IMPORTANT:" not in content and "CASE ID:" not in content:
+            continue
         
         case_ids = re.findall(case_id_pattern, content)
         if case_ids:
@@ -503,13 +509,14 @@ def _extract_case_id_from_messages(messages: List) -> Optional[str]:
                         try:
                             case = cases_collection.find_one({'_id': ObjectId(cid)})
                             if case:
-                                logger.info(f"✅ Found valid case ID in conversation history: {cid}")
+                                logger.info(f"✅ Found valid case ID in conversation history: {cid} (from message: {type(msg).__name__})")
                                 return cid
                         except:
                             continue
             except Exception as e:
                 logger.warning(f"Error verifying case ID: {e}")
     
+    logger.warning("No valid case ID found in conversation history")
     return None
 
 
@@ -587,14 +594,18 @@ def check_case_id_needed(query: str) -> str:
         # Since this tool is called by the agent, the messages are in the agent's context
         # We'll return a special response that tells the agent to check the messages
         
-        # For now, return a response that instructs the agent to look in conversation history
+        # If user confirmed, the case ID extraction should have happened in call_model
+        # But if this tool is called again, it means we need to check history
         if is_confirmation:
-            # User said "yes" - they want to use the case ID from earlier conversation
+            # User said "yes" - check if there's a case ID in the conversation
+            # Note: This tool doesn't have direct access to full conversation, but the agent's call_model
+            # should have already extracted it. If we're here, return a message that tells the agent
+            # the case ID should already be in the system message
             return json.dumps({
                 'needs_clarification': False,
                 'check_history': True,
-                'message': 'User confirmed - check previous messages for case ID and use it to answer the original question.',
-                'instruction': 'Look through ALL previous messages (both user and assistant) to find any case ID (24-character hex string). If found, use that case ID to answer the question that was asked before the clarification request.'
+                'message': 'User confirmed. If a case ID was mentioned earlier in the conversation, it should already be extracted. Check the system messages for the case ID. If no case ID is found in system messages, ask the user to provide the case ID.',
+                'instruction': 'Look for a system message that says "The case ID is: [ID]". If found, use that case ID. If not found, ask the user to provide the case ID.'
             }, ensure_ascii=False)
         
         # No case ID found - need clarification
@@ -1279,14 +1290,18 @@ IMPORTANT RULES:
      * Questions about how the system works
      * General inquiries that are not case-specific
      * Questions that don't mention cases, parties, charges, incidents, or legal matters
-   - This tool will:
-   - Check if a case ID is present in the query or conversation history
-   - If the user says "yes", "نعم", "ok", "حسناً" after being asked for a case ID, the system will automatically extract the case ID from conversation history
-   - **CRITICAL**: When a case ID is found in conversation history (you'll see a system message with "IMPORTANT: The user confirmed to use the case ID from earlier conversation. The case ID is: XXX"), you MUST:
-     a. Use that case ID immediately to answer the ORIGINAL question that was asked before the clarification request
-     b. Look back at the conversation to find the original question (e.g., "who was the accused?")
-     c. Call the appropriate tool with the extracted case ID (e.g., query_accused with that case ID)
-     d. Provide a complete answer to the original question
+   - **CRITICAL - CASE ID EXTRACTION**: When the user says "yes", "نعم", "ok", "حسناً" after being asked for a case ID, the system will automatically extract the case ID from conversation history and add it to a system message. When you see a system message that says "IMPORTANT: The user confirmed to use the case ID from earlier conversation. The case ID is: [24-character hex string]", you MUST:
+     a. **IMMEDIATELY extract the case ID from that system message** (look for "The case ID is: " followed by a 24-character hex string)
+     b. **DO NOT call check_case_id_needed again** - the case ID is already provided, calling it again will cause a loop
+     c. Find the ORIGINAL question in the conversation (the question that was asked BEFORE the clarification request)
+     d. Call the appropriate tool DIRECTLY with the extracted case ID:
+        * If original question was about accused → call query_accused(case_id)
+        * If about victims → call query_victims(case_id)
+        * If about incident → call get_case_incident_details(case_id)
+        * If about verdict → call get_case_verdict_punishment(case_id)
+        * etc.
+     e. Provide a complete answer to the original question using the tool results
+     f. **NEVER ask for the case ID again** once it's been provided in a system message
    - Example flow: 
      * User: "who was the accused?" 
      * You: "عذراً، يبدو أنك تسأل عن قضية معينة، لكن لم أتمكن من تحديد رقم القضية..."
@@ -1295,6 +1310,7 @@ IMPORTANT RULES:
      * You: Call query_accused("6979c405fa024fa3f8a3ad1b") and answer "who was the accused?"
    - If no case ID is found, respond with the clarification message asking the user to specify which case
 2. **YOU MUST USE TOOLS** for any query about cases, parties, charges, documents, incidents, or legal matters. DO NOT answer from memory, general knowledge, or conversation history - ALWAYS call the appropriate tool(s) first, even if you think you know the answer from previous messages.
+   - **EXCEPTION**: If a system message already provides a case ID (format: "CASE ID: [24-character hex string]"), DO NOT call check_case_id_needed again. Use the provided case ID directly.
 3. **CRITICAL**: Even if conversation history mentions a case ID or details, you MUST still call tools to get the current, accurate data from MongoDB. Do not rely on information from previous messages - always query the database.
 4. When user asks about "case N" or "case number N", they mean case_id=N (the internal case ID)
 5. Always use Arabic names (name_ar) as primary - English names are secondary
@@ -1404,6 +1420,13 @@ def create_agent():
         if not messages or not isinstance(messages[0], SystemMessage):
             messages = [SystemMessage(content=SYSTEM_PROMPT)] + messages
         
+        # Check if a case ID was already extracted (to avoid re-extraction)
+        case_id_already_extracted = False
+        for msg in state["messages"]:
+            if isinstance(msg, SystemMessage) and "The case ID is:" in msg.content:
+                case_id_already_extracted = True
+                break
+        
         # Check if user said "yes" or similar confirmation - if so, extract case ID from history
         last_user_msg = None
         for msg in reversed(state["messages"]):
@@ -1411,13 +1434,26 @@ def create_agent():
                 last_user_msg = msg.content.lower().strip()
                 break
         
-        if last_user_msg and any(keyword in last_user_msg for keyword in ["yes", "نعم", "ok", "حسناً", "تمام", "موافق"]):
+        if not case_id_already_extracted and last_user_msg and any(keyword in last_user_msg for keyword in ["yes", "نعم", "ok", "حسناً", "تمام", "موافق"]):
             # User confirmed - check if we need to extract case ID
             case_id = _extract_case_id_from_messages(state["messages"])
             if case_id:
                 logger.info(f"✅ Extracted case ID from conversation history: {case_id}")
-                # Add a hint message to help the agent use this case ID
-                hint_msg = SystemMessage(content=f"IMPORTANT: The user confirmed to use the case ID from earlier conversation. The case ID is: {case_id}. Use this case ID to answer the question that was asked before the clarification request.")
+                # Find the original question (the one before the clarification request)
+                original_question = None
+                for msg in reversed(state["messages"][:-1]):  # Skip the last "yes" message
+                    if isinstance(msg, HumanMessage):
+                        # Skip if it's also a confirmation
+                        content_lower = msg.content.lower().strip()
+                        if not any(kw in content_lower for kw in ["yes", "نعم", "ok", "حسناً", "تمام", "موافق"]):
+                            original_question = msg.content
+                            break
+                
+                # Add a clear, explicit hint message with the case ID prominently displayed
+                if original_question:
+                    hint_msg = SystemMessage(content=f"IMPORTANT: The user confirmed to use the case ID from earlier conversation.\n\nCASE ID: {case_id}\n\nORIGINAL QUESTION: '{original_question}'\n\nYou MUST now call the appropriate tool with this case ID ({case_id}) to answer the original question. DO NOT call check_case_id_needed again - the case ID is already provided above.")
+                else:
+                    hint_msg = SystemMessage(content=f"IMPORTANT: The user confirmed to use the case ID from earlier conversation.\n\nCASE ID: {case_id}\n\nLook at the conversation history to find the original question and use this case ID ({case_id}) to answer it. DO NOT call check_case_id_needed again - the case ID is already provided above.")
                 messages = [SystemMessage(content=SYSTEM_PROMPT), hint_msg] + [m for m in state["messages"] if not isinstance(m, SystemMessage)]
         
         response = llm_with_tools.invoke(messages)
