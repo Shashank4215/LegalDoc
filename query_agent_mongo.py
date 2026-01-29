@@ -555,9 +555,13 @@ def _extract_case_id_from_messages(messages: List) -> Optional[str]:
     import re
     case_id_pattern = r'\b[0-9a-fA-F]{24}\b'
     
+    logger.debug(f"🔍 Searching for case ID in {len(messages)} messages...")
+    
     # Search through all messages (including assistant messages which might have mentioned case IDs)
-    for msg in reversed(messages):  # Search from most recent to oldest
+    for idx, msg in enumerate(reversed(messages)):  # Search from most recent to oldest
         content = ""
+        msg_type = type(msg).__name__
+        
         if hasattr(msg, 'content'):
             content = str(msg.content)
         elif isinstance(msg, dict):
@@ -567,15 +571,18 @@ def _extract_case_id_from_messages(messages: List) -> Optional[str]:
         
         # Skip system messages that are just prompts (but keep ones with case IDs)
         if isinstance(msg, SystemMessage):
-            if "CASE ID:" in content or "IMPORTANT:" in content:
+            if "CASE ID:" in content or "IMPORTANT:" in content or "CRITICAL" in content:
                 # This might contain a case ID, check it
-                pass
+                logger.debug(f"  Checking SystemMessage (idx {len(messages)-idx-1}): contains CASE ID/IMPORTANT/CRITICAL")
             else:
                 # Skip regular system prompts
+                logger.debug(f"  Skipping SystemMessage (idx {len(messages)-idx-1}): regular prompt")
                 continue
         
+        # Check for case IDs in content
         case_ids = re.findall(case_id_pattern, content)
         if case_ids:
+            logger.debug(f"  Found potential case ID(s) in {msg_type} (idx {len(messages)-idx-1}): {case_ids}")
             # Verify case ID exists in database
             try:
                 with MongoManager(**CONFIG['mongodb']) as mongo:
@@ -584,15 +591,19 @@ def _extract_case_id_from_messages(messages: List) -> Optional[str]:
                         try:
                             case = cases_collection.find_one({'_id': ObjectId(cid)})
                             if case:
-                                logger.info(f"✅ Found valid case ID in conversation history: {cid} (from message type: {type(msg).__name__}, content preview: {content[:100]}...)")
+                                logger.info(f"✅ Found valid case ID in conversation history: {cid} (from message type: {msg_type}, idx: {len(messages)-idx-1}, content preview: {content[:100]}...)")
                                 return cid
+                            else:
+                                logger.debug(f"  Case ID {cid} not found in database")
                         except Exception as e:
                             logger.debug(f"Error checking case ID {cid}: {e}")
                             continue
             except Exception as e:
                 logger.warning(f"Error verifying case ID: {e}")
+        else:
+            logger.debug(f"  No case ID pattern found in {msg_type} (idx {len(messages)-idx-1})")
     
-    logger.warning(f"No valid case ID found in conversation history (searched {len(messages)} messages)")
+    logger.warning(f"❌ No valid case ID found in conversation history (searched {len(messages)} messages)")
     return None
 
 
@@ -1989,17 +2000,42 @@ def create_agent():
             messages = [SystemMessage(content=SYSTEM_PROMPT)] + messages
         
         # Check if a case ID was already extracted (to avoid re-extraction)
+        # Look in both SystemMessages (where we inject case IDs) and other messages (where case IDs might be mentioned)
         case_id_already_extracted = False
         extracted_case_id = None
+        import re
+        case_id_pattern = r'\b([0-9a-fA-F]{24})\b'
+        
+        # First, check SystemMessages for explicit case ID injection
         for msg in state["messages"]:
-            if isinstance(msg, SystemMessage) and "CASE ID:" in msg.content:
+            if isinstance(msg, SystemMessage) and ("CASE ID:" in msg.content or "CRITICAL" in msg.content):
                 case_id_already_extracted = True
                 # Extract the case ID from the system message
-                import re
                 case_id_match = re.search(r'CASE ID:\s*([0-9a-fA-F]{24})', msg.content)
                 if case_id_match:
                     extracted_case_id = case_id_match.group(1)
-                break
+                    logger.debug(f"Found already-extracted case ID in SystemMessage: {extracted_case_id}")
+                    break
+        
+        # If not found in SystemMessage, check if any message contains a valid case ID
+        # (This handles cases where assistant mentioned a case ID in a previous turn)
+        if not extracted_case_id:
+            temp_case_id = _extract_case_id_from_messages(state["messages"])
+            if temp_case_id:
+                # Check if this case ID was already used (i.e., there's a SystemMessage with it)
+                already_used = False
+                for msg in state["messages"]:
+                    if isinstance(msg, SystemMessage) and temp_case_id in msg.content:
+                        already_used = True
+                        break
+                
+                if already_used:
+                    case_id_already_extracted = True
+                    extracted_case_id = temp_case_id
+                    logger.debug(f"Found case ID in conversation history that was already used: {extracted_case_id}")
+                else:
+                    # Case ID found in messages but not yet extracted - we'll use it in proactive extraction
+                    logger.debug(f"Found case ID in conversation history but not yet extracted: {temp_case_id}")
         
         # Get the last user message
         last_user_msg = None
@@ -2101,6 +2137,8 @@ def create_agent():
             
             # If it's a case-related query without a case ID, check history
             if (has_case_keyword or has_case_phrase) and not case_ids_in_query:
+                logger.debug(f"🔍 Case-related query detected (keywords: {has_case_keyword}, phrases: {has_case_phrase}), checking history for case ID...")
+                logger.debug(f"   Messages to search: {len(state['messages'])}")
                 case_id = _extract_case_id_from_messages(state["messages"])
                 if case_id:
                     logger.info(f"✅ Extracted case ID from conversation history for query: {last_user_msg_content[:50]}...")
